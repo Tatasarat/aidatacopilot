@@ -1,15 +1,21 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config();
 
 const queryRoute = require('./src/routes/query');
 const uploadRoute = require('./src/routes/upload');
 
 const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_URL }));
-app.use(express.json());
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    process.env.CLIENT_URL
+  ],
+  credentials: true
+}));
 
+app.use(express.json());
 app.use('/api', uploadRoute);
 app.use('/api', queryRoute);
 
