@@ -320,6 +320,7 @@ function SignupPage({ onSignup, onGoLogin }) {
 
 // ─── Main App ─────────────────────────────────────────────
 export default function App() {
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
   const [screen, setScreen] = useState('login'); // login | signup | upload | chat
   const [user, setUser] = useState(null);
   const [tableName, setTableName] = useState(null);
@@ -345,7 +346,8 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await axios.post('http://localhost:4000/api/upload', formData);
+      const res = await axios.post(`${API_URL}/api/upload`, formData);
+
       setCsvInfo(res.data);
       setTableName(res.data.tableName);
       setScreen('chat');
@@ -363,7 +365,7 @@ export default function App() {
     setError(null);
     setData(null);
     try {
-      const res = await axios.post('http://localhost:4000/api/query', { question: query, tableName });
+      const res = await axios.post(`${API_URL}/api/query`, { question: query, tableName });
       setData(res.data);
       setHistory(h => [{ question: query, time: new Date().toLocaleTimeString() }, ...h.slice(0, 4)]);
     } catch (err) {
