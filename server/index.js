@@ -10,6 +10,8 @@ const app = express();
 app.use(cors({
   origin: [
     'http://localhost:3000',
+    'https://aidatacopilot-qqy5.vercel.app',
+    'https://aidatacopilot-qqy5-7vcr8hfs6-tata-sarats-projects.vercel.app',
     process.env.CLIENT_URL
   ],
   credentials: true
