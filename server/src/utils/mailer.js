@@ -2,7 +2,7 @@ const https = require('https');
 
 async function sendEmail(to, subject, html) {
   const data = JSON.stringify({
-    sender: { name: 'InsightAI', email: 'your-verified-email@gmail.com' },
+    sender: { name: 'InsightAI', email: process.env.BREVO_SENDER_EMAIL },
     to: [{ email: to }],
     subject,
     htmlContent: html
