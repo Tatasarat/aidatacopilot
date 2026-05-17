@@ -1,19 +1,10 @@
-const nodemailer = require('nodemailer');
-require('dotenv').config();
+const { Resend } = require('resend');
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASS,
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendOTPEmail(to, otp) {
-  await transporter.sendMail({
-    from: `"InsightAI" <${process.env.GMAIL_USER}>`,
+  await resend.emails.send({
+    from: 'InsightAI <onboarding@resend.dev>',
     to,
     subject: 'Your InsightAI verification code',
     html: `
@@ -30,8 +21,8 @@ async function sendOTPEmail(to, otp) {
 }
 
 async function sendPasswordResetEmail(to, resetLink) {
-  await transporter.sendMail({
-    from: `"InsightAI" <${process.env.GMAIL_USER}>`,
+  await resend.emails.send({
+    from: 'InsightAI <onboarding@resend.dev>',
     to,
     subject: 'Reset your InsightAI password',
     html: `
