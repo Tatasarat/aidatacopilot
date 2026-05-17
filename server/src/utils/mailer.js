@@ -2,20 +2,20 @@ const https = require('https');
 
 async function sendEmail(to, subject, html) {
   const data = JSON.stringify({
-    from: 'InsightAI <onboarding@resend.dev>',
-    to: [to],
+    sender: { name: 'InsightAI', email: 'your-verified-email@gmail.com' },
+    to: [{ email: to }],
     subject,
-    html
+    htmlContent: html
   });
 
   return new Promise((resolve, reject) => {
     const options = {
-      hostname: 'api.resend.com',
+      hostname: 'api.brevo.com',
       port: 443,
-      path: '/emails',
+      path: '/v3/smtp/email',
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+        'api-key': process.env.BREVO_API_KEY,
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(data)
       }
@@ -28,7 +28,7 @@ async function sendEmail(to, subject, html) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(JSON.parse(body));
         } else {
-          reject(new Error(`Resend API error: ${body}`));
+          reject(new Error(`Brevo API error: ${body}`));
         }
       });
     });
