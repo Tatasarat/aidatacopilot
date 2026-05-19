@@ -89,10 +89,19 @@ function Topbar({ user, onLogout, showStatus, rowCount, onProfile }) {
             <span style={{ background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 8px', borderRadius: 4 }}>AI</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {showStatus && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div className="pulse-dot"></div><span style={{ fontSize: 12, color: '#4b5563' }}>{rowCount} rows loaded</span></div>}
+            {showStatus && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div className="pulse-dot"></div>
+                <span style={{ fontSize: 12, color: '#4b5563' }}>{rowCount} rows loaded</span>
+              </div>
+            )}
             {user && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div onClick={onProfile} title="View Profile" style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}>
+                <div
+                  onClick={onProfile}
+                  title="View Profile"
+                  style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}
+                >
                   {user.name?.charAt(0).toUpperCase()}
                 </div>
                 <span style={{ fontSize: 13, color: '#64748b' }}>{user.name}</span>
@@ -495,6 +504,7 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
       <div className="glow-line"></div>
 
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 24px' }}>
+
         {/* Profile Header */}
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
           <div className="avatar-wrap" onClick={() => avatarInputRef.current?.click()}>
@@ -614,7 +624,6 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
                 {saving ? 'Saving...' : 'Save Preferences'}
               </button>
             </div>
-
             <div className="card" style={{ marginBottom: 16 }}>
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Change Password</p>
               <div style={{ marginBottom: 12 }}>
@@ -633,7 +642,6 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
                 {saving ? 'Updating...' : 'Update Password'}
               </button>
             </div>
-
             <div className="card" style={{ borderColor: '#450a0a' }}>
               <p style={{ fontSize: 13, color: '#f87171', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>⚠️ Danger Zone</p>
               <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>Deleting your account is permanent and cannot be undone.</p>
@@ -757,9 +765,11 @@ export default function App() {
             {uploadError && <div style={{ marginTop: 16, background: '#1a0505', border: '1px solid #450a0a', borderRadius: 8, padding: '12px 16px', color: '#f87171', fontSize: 14 }}>⚠️ {uploadError}</div>}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 40 }}>
-              {[{ icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
+              {[
+                { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
                 { icon: '🔍', title: 'Anomaly Detection', desc: 'AI spots outliers and trends automatically' },
-                { icon: '📊', title: 'Auto Charts', desc: 'Results visualized as interactive charts' }].map(f => (
+                { icon: '📊', title: 'Auto Charts', desc: 'Results visualized as interactive charts' }
+              ].map(f => (
                 <div key={f.title} className="card" style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 28, marginBottom: 10 }}>{f.icon}</div>
                   <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{f.title}</p>
@@ -809,7 +819,12 @@ export default function App() {
               </div>
             )}
 
-            {error && <div className="card fade-in" style={{ borderColor: '#450a0a', background: '#1a0505' }}><p style={{ color: '#f87171', fontWeight: 600, marginBottom: 4 }}>⚠️ Error</p><p style={{ color: '#ef4444', fontSize: 14 }}>{error}</p></div>}
+            {error && (
+              <div className="card fade-in" style={{ borderColor: '#450a0a', background: '#1a0505' }}>
+                <p style={{ color: '#f87171', fontWeight: 600, marginBottom: 4 }}>⚠️ Error</p>
+                <p style={{ color: '#ef4444', fontSize: 14 }}>{error}</p>
+              </div>
+            )}
 
             {data && !loading && (
               <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -830,7 +845,12 @@ export default function App() {
                   </summary>
                   <div style={{ marginTop: 14 }}><pre className="sql-block">{data.sql}</pre></div>
                 </details>
-                {data.results?.length > 0 && <div className="card"><div style={{ marginBottom: 14 }}><span className="badge badge-blue">📈 Chart</span></div><ChartView data={data.results} /></div>}
+                {data.results?.length > 0 && (
+                  <div className="card">
+                    <div style={{ marginBottom: 14 }}><span className="badge badge-blue">📈 Chart</span></div>
+                    <ChartView data={data.results} />
+                  </div>
+                )}
                 {data.results?.length > 0 && (
                   <div className="card">
                     <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -848,7 +868,9 @@ export default function App() {
                 <p style={{ color: '#374151', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Recent queries</p>
                 {history.map((h, i) => (
                   <div key={i} className="history-item" onClick={() => { setQuestion(h.question); handleQuery(h.question); }}>
-                    <span style={{ color: '#374151' }}>↩</span><span style={{ flex: 1 }}>{h.question}</span><span style={{ fontSize: 11 }}>{h.time}</span>
+                    <span style={{ color: '#374151' }}>↩</span>
+                    <span style={{ flex: 1 }}>{h.question}</span>
+                    <span style={{ fontSize: 11 }}>{h.time}</span>
                   </div>
                 ))}
               </div>
