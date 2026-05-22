@@ -11,6 +11,12 @@ const suggestions = [
   'Find anomalies in billing amounts',
 ];
 
+const PLANS = {
+  free: { name: 'Free', price: '$0/mo', queries: 10, color: '#4b5563', features: ['10 queries/month', 'Basic analysis', 'CSV upload', 'Bar charts'] },
+  pro: { name: 'Pro', price: '$19/mo', queries: 100, color: '#3b82f6', features: ['100 queries/month', 'Advanced analysis', 'Multiple CSVs', 'PDF export', 'Trend charts', 'Correlation heatmap'] },
+  enterprise: { name: 'Enterprise', price: '$99/mo', queries: 'Unlimited', color: '#8b5cf6', features: ['Unlimited queries', 'All Pro features', 'Priority support', 'Custom models', 'API access'] },
+};
+
 const STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -21,6 +27,8 @@ const STYLES = `
   .badge-blue { background: rgba(59,130,246,0.15); color: #60a5fa; }
   .badge-amber { background: rgba(245,158,11,0.15); color: #fbbf24; }
   .badge-green { background: rgba(16,185,129,0.15); color: #34d399; }
+  .badge-purple { background: rgba(139,92,246,0.15); color: #a78bfa; }
+  .badge-red { background: rgba(239,68,68,0.15); color: #f87171; }
   .chip { background: #1e293b; border: 1px solid #2d3748; border-radius: 20px; padding: 6px 14px; font-size: 12px; color: #94a3b8; cursor: pointer; transition: all 0.2s; white-space: nowrap; font-family: 'DM Sans', sans-serif; }
   .chip:hover { background: #2d3748; color: #e2e8f0; border-color: #3b82f6; }
   .ask-btn { background: linear-gradient(135deg, #3b82f6, #6366f1); border: none; border-radius: 8px; color: white; font-size: 14px; font-weight: 600; padding: 10px 22px; cursor: pointer; transition: opacity 0.2s, transform 0.1s; font-family: 'DM Sans', sans-serif; white-space: nowrap; }
@@ -75,10 +83,252 @@ const STYLES = `
   .toggle-dot.off { left: 3px; }
   .danger-btn { width: 100%; background: transparent; border: 1px solid #450a0a; border-radius: 8px; color: #f87171; font-size: 14px; font-weight: 600; padding: 12px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.2s; margin-top: 8px; }
   .danger-btn:hover { background: #1a0505; }
+  .credit-bar { height: 6px; border-radius: 3px; background: #1e293b; overflow: hidden; margin-top: 6px; }
+  .credit-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+  .plan-card { background: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 24px; cursor: pointer; transition: all 0.2s; }
+  .plan-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
+  .plan-card.current { border-color: #3b82f6; background: rgba(59,130,246,0.05); }
+  .heatmap-cell { display: inline-block; border-radius: 2px; font-size: 9px; color: white; text-align: center; line-height: 1; }
 `;
 
+// ─── Credits Bar Component ────────────────────────────────
+function CreditsBar({ credits, onUpgrade }) {
+  if (!credits) return null;
+  const isUnlimited = credits.plan === 'enterprise';
+  const pct = isUnlimited ? 0 : Math.min(100, (credits.credits_used / credits.credits_limit) * 100);
+  const barColor = pct > 80 ? '#f87171' : pct > 50 ? '#fbbf24' : '#34d399';
+  const planColors = { free: '#4b5563', pro: '#3b82f6', enterprise: '#8b5cf6' };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, color: planColors[credits.plan], fontWeight: 700, textTransform: 'uppercase' }}>{credits.plan}</span>
+          {credits.plan !== 'enterprise' && (
+            <span style={{ fontSize: 11, color: '#4b5563' }}>{credits.credits_used}/{credits.credits_limit} queries</span>
+          )}
+          {credits.plan === 'enterprise' && <span style={{ fontSize: 11, color: '#4b5563' }}>unlimited</span>}
+        </div>
+        {!isUnlimited && (
+          <div className="credit-bar" style={{ width: 80 }}>
+            <div className="credit-fill" style={{ width: `${pct}%`, background: barColor }}></div>
+          </div>
+        )}
+      </div>
+      {credits.plan !== 'enterprise' && (
+        <button onClick={onUpgrade} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 11, fontWeight: 600, padding: '4px 10px', cursor: 'pointer' }}>
+          Upgrade ↑
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Upgrade Page ─────────────────────────────────────────
+function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
+  const [upgrading, setUpgrading] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const handleUpgrade = async (plan) => {
+    setUpgrading(plan);
+    try {
+      await axios.post(`${API_URL}/api/upgrade-plan`, { email: user.email, plan });
+      setMsg(`Successfully upgraded to ${plan}!`);
+      onUpgrade(plan);
+    } catch (err) {
+      setMsg('Upgrade failed. Please try again.');
+    } finally { setUpgrading(''); }
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e2e8f0', fontFamily: "'DM Sans', sans-serif" }}>
+      <div style={{ borderBottom: '1px solid #1e293b', padding: '0 32px' }}>
+        <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', alignItems: 'center', height: 56, gap: 12 }}>
+          <button onClick={onBack} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 8, color: '#94a3b8', fontSize: 13, padding: '6px 14px', cursor: 'pointer' }}>← Back</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 24, height: 24, background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>🧠</div>
+            <span style={{ fontWeight: 600, fontSize: 15 }}>InsightAI — Upgrade Plan</span>
+          </div>
+        </div>
+      </div>
+      <div className="glow-line"></div>
+
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '48px 24px' }}>
+        <div style={{ textAlign: 'center', marginBottom: 48 }}>
+          <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-0.03em', marginBottom: 12 }}>
+            Choose your plan
+          </h1>
+          <p style={{ color: '#4b5563', fontSize: 15 }}>Unlock more queries and advanced features</p>
+          {msg && <div className="success-msg" style={{ display: 'inline-block', marginTop: 16 }}>✓ {msg}</div>}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          {Object.entries(PLANS).map(([key, plan]) => (
+            <div key={key} className={`plan-card ${credits?.plan === key ? 'current' : ''}`}
+              style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b' }}>
+              {key === 'pro' && (
+                <div style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, color: 'white', display: 'inline-block', marginBottom: 12 }}>MOST POPULAR</div>
+              )}
+              <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4, color: plan.color }}>{plan.name}</h2>
+              <p style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>{plan.price}</p>
+              <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>{plan.queries} queries/month</p>
+              <div style={{ marginBottom: 24 }}>
+                {plan.features.map(f => (
+                  <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ color: '#34d399', fontSize: 14 }}>✓</span>
+                    <span style={{ fontSize: 13, color: '#94a3b8' }}>{f}</span>
+                  </div>
+                ))}
+              </div>
+              {credits?.plan === key ? (
+                <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>Current Plan</div>
+              ) : (
+                <button onClick={() => handleUpgrade(key)} disabled={upgrading === key}
+                  style={{ width: '100%', background: `linear-gradient(135deg, ${plan.color}, ${plan.color}dd)`, border: 'none', borderRadius: 8, color: 'white', fontSize: 14, fontWeight: 600, padding: '12px', cursor: 'pointer' }}>
+                  {upgrading === key ? 'Upgrading...' : `Get ${plan.name}`}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Correlation Heatmap ──────────────────────────────────
+function CorrelationHeatmap({ correlations }) {
+  if (!correlations || !correlations.length) return null;
+
+  const getColor = (val) => {
+    const abs = Math.abs(val);
+    if (abs > 0.8) return val > 0 ? '#1d4ed8' : '#dc2626';
+    if (abs > 0.6) return val > 0 ? '#3b82f6' : '#ef4444';
+    if (abs > 0.4) return val > 0 ? '#93c5fd' : '#fca5a5';
+    return '#1e293b';
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize: 12, color: '#4b5563', marginBottom: 12 }}>Strong correlations found:</p>
+      {correlations.slice(0, 6).map((c, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', width: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.col1}</span>
+            <span style={{ fontSize: 11, color: '#374151' }}>↔</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', width: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.col2}</span>
+          </div>
+          <div style={{ width: 100, height: 20, background: '#0d1117', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: `${Math.abs(c.correlation) * 50}%`, background: getColor(c.correlation), transform: c.correlation > 0 ? 'none' : 'translateX(-100%)' }}></div>
+          </div>
+          <span style={{ fontSize: 12, color: getColor(c.correlation), fontWeight: 600, width: 40, textAlign: 'right', fontFamily: 'monospace' }}>{c.correlation}</span>
+          <span style={{ fontSize: 10, color: '#4b5563', width: 50 }}>{c.strength}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Trend Chart ──────────────────────────────────────────
+function TrendChart({ trends }) {
+  if (!trends || !trends.length) return null;
+
+  return (
+    <div>
+      {trends.slice(0, 4).map((t, i) => (
+        <div key={i} style={{ marginBottom: 16, background: '#0d1117', borderRadius: 8, padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>{t.column}</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: t.direction === 'increasing' ? '#34d399' : '#f87171' }}>
+                {t.direction === 'increasing' ? '↑' : '↓'} {Math.abs(t.change_pct)}%
+              </span>
+              <span style={{ fontSize: 11, color: '#374151' }}>avg: {t.mean}</span>
+            </div>
+          </div>
+          <div style={{ height: 4, background: '#1e293b', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.min(100, Math.abs(t.change_pct))}%`, background: t.direction === 'increasing' ? '#34d399' : '#f87171', borderRadius: 2 }}></div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Cluster Visualization ────────────────────────────────
+function ClusterViz({ clusters }) {
+  if (!clusters || !clusters.length) return null;
+  const colors = ['#3b82f6', '#8b5cf6', '#34d399', '#fbbf24', '#f87171'];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        {clusters.map((c, i) => (
+          <div key={i} style={{ flex: c.size, background: colors[i % colors.length], borderRadius: 4, height: 8, opacity: 0.8 }}></div>
+        ))}
+      </div>
+      {clusters.map((c, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, background: '#0d1117', borderRadius: 8, padding: '10px 14px' }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: colors[i % colors.length], flexShrink: 0 }}></div>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>Cluster {i + 1}</span>
+            <span style={{ fontSize: 12, color: '#4b5563', marginLeft: 8 }}>{c.size} rows ({c.percentage}%)</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {Object.entries(c.stats || {}).slice(0, 2).map(([k, v]) => (
+              <span key={k} style={{ fontSize: 11, color: '#374151' }}>{k}: {v}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── PDF Export ───────────────────────────────────────────
+function exportToPDF(data, question) {
+  const content = `
+    InsightAI Analysis Report
+    ========================
+    Question: ${question}
+    Date: ${new Date().toLocaleDateString()}
+
+    SUMMARY
+    -------
+    ${data.explanation}
+
+    ANOMALIES
+    ---------
+    ${data.anomalies}
+
+    SQL GENERATED
+    -------------
+    ${data.sql}
+
+    RESULTS (first 20 rows)
+    -----------------------
+    ${data.results ? JSON.stringify(data.results.slice(0, 20), null, 2) : 'No results'}
+
+    TRENDS
+    ------
+    ${data.trends ? data.trends.map(t => `${t.column}: ${t.direction} (${t.change_pct}% change)`).join('\n') : 'No trends'}
+
+    CORRELATIONS
+    ------------
+    ${data.correlations ? data.correlations.map(c => `${c.col1} ↔ ${c.col2}: ${c.correlation}`).join('\n') : 'No correlations'}
+  `;
+
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `insightai-report-${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Topbar ───────────────────────────────────────────────
-function Topbar({ user, onLogout, showStatus, rowCount, onProfile }) {
+function Topbar({ user, onLogout, showStatus, rowCount, onProfile, onUpgrade, credits }) {
   return (
     <>
       <div style={{ borderBottom: '1px solid #1e293b', padding: '0 32px' }}>
@@ -89,19 +339,11 @@ function Topbar({ user, onLogout, showStatus, rowCount, onProfile }) {
             <span style={{ background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 8px', borderRadius: 4 }}>AI</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {showStatus && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div className="pulse-dot"></div>
-                <span style={{ fontSize: 12, color: '#4b5563' }}>{rowCount} rows loaded</span>
-              </div>
-            )}
+            {showStatus && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div className="pulse-dot"></div><span style={{ fontSize: 12, color: '#4b5563' }}>{rowCount} rows loaded</span></div>}
+            {user && <CreditsBar credits={credits} onUpgrade={onUpgrade} />}
             {user && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div
-                  onClick={onProfile}
-                  title="View Profile"
-                  style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}
-                >
+                <div onClick={onProfile} title="View Profile" style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}>
                   {user.name?.charAt(0).toUpperCase()}
                 </div>
                 <span style={{ fontSize: 13, color: '#64748b' }}>{user.name}</span>
@@ -223,9 +465,8 @@ function SignupPage({ onSignup, onGoLogin, API_URL }) {
     try {
       await axios.post(`${API_URL}/api/send-otp`, { email });
       setSuccess('New OTP sent!');
-    } catch (err) {
-      setError('Failed to resend OTP');
-    } finally { setLoading(false); }
+    } catch (err) { setError('Failed to resend OTP'); }
+    finally { setLoading(false); }
   };
 
   return (
@@ -247,22 +488,10 @@ function SignupPage({ onSignup, onGoLogin, API_URL }) {
             {success && <div className="success-msg">✓ {success}</div>}
             {step === 'form' ? (
               <>
-                <div style={{ marginBottom: 16 }}>
-                  <label className="input-label">Full name</label>
-                  <input className="auth-input" type="text" placeholder="John Smith" value={name} onChange={e => setName(e.target.value)} />
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                  <label className="input-label">Email address</label>
-                  <input className="auth-input" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} />
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                  <label className="input-label">Password</label>
-                  <input className="auth-input" type="password" placeholder="Min. 6 characters" value={password} onChange={e => setPassword(e.target.value)} />
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <label className="input-label">Confirm password</label>
-                  <input className="auth-input" type="password" placeholder="••••••••" value={confirm} onChange={e => setConfirm(e.target.value)} />
-                </div>
+                <div style={{ marginBottom: 16 }}><label className="input-label">Full name</label><input className="auth-input" type="text" placeholder="John Smith" value={name} onChange={e => setName(e.target.value)} /></div>
+                <div style={{ marginBottom: 16 }}><label className="input-label">Email address</label><input className="auth-input" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} /></div>
+                <div style={{ marginBottom: 16 }}><label className="input-label">Password</label><input className="auth-input" type="password" placeholder="Min. 6 characters" value={password} onChange={e => setPassword(e.target.value)} /></div>
+                <div style={{ marginBottom: 20 }}><label className="input-label">Confirm password</label><input className="auth-input" type="password" placeholder="••••••••" value={confirm} onChange={e => setConfirm(e.target.value)} /></div>
                 <button className="auth-btn" onClick={handleSendOTP} disabled={loading}>
                   {loading ? <><span className="spinner" style={{ width: 16, height: 16, marginRight: 8 }}></span>Sending OTP...</> : 'Send verification code →'}
                 </button>
@@ -279,12 +508,8 @@ function SignupPage({ onSignup, onGoLogin, API_URL }) {
                 <button className="auth-btn" onClick={handleVerifyOTP} disabled={loading}>
                   {loading ? <><span className="spinner" style={{ width: 16, height: 16, marginRight: 8 }}></span>Verifying...</> : 'Verify & Create Account →'}
                 </button>
-                <p style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, marginTop: 16 }}>
-                  Didn't receive it? <span className="auth-link" onClick={handleResendOTP}>Resend OTP</span>
-                </p>
-                <p style={{ textAlign: 'center', marginTop: 8 }}>
-                  <span className="auth-link" onClick={() => { setStep('form'); setError(''); setSuccess(''); }}>← Go back</span>
-                </p>
+                <p style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, marginTop: 16 }}>Didn't receive it? <span className="auth-link" onClick={handleResendOTP}>Resend OTP</span></p>
+                <p style={{ textAlign: 'center', marginTop: 8 }}><span className="auth-link" onClick={() => { setStep('form'); setError(''); setSuccess(''); }}>← Go back</span></p>
               </>
             )}
           </div>
@@ -330,19 +555,14 @@ function ForgotPasswordPage({ onGoLogin, API_URL }) {
             {success && <div className="success-msg">✓ {success}</div>}
             {!success && (
               <>
-                <div style={{ marginBottom: 20 }}>
-                  <label className="input-label">Email address</label>
-                  <input className="auth-input" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-                </div>
+                <div style={{ marginBottom: 20 }}><label className="input-label">Email address</label><input className="auth-input" type="email" placeholder="you@company.com" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSubmit()} /></div>
                 <button className="auth-btn" onClick={handleSubmit} disabled={loading}>
                   {loading ? <><span className="spinner" style={{ width: 16, height: 16, marginRight: 8 }}></span>Sending...</> : 'Send reset link →'}
                 </button>
               </>
             )}
           </div>
-          <p style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, marginTop: 20 }}>
-            <span className="auth-link" onClick={onGoLogin}>← Back to login</span>
-          </p>
+          <p style={{ textAlign: 'center', color: '#4b5563', fontSize: 13, marginTop: 20 }}><span className="auth-link" onClick={onGoLogin}>← Back to login</span></p>
         </div>
       </div>
     </div>
@@ -364,7 +584,7 @@ function ResetPasswordPage({ token, onGoLogin, API_URL }) {
     setLoading(true); setError('');
     try {
       await axios.post(`${API_URL}/api/reset-password`, { token, password });
-      setSuccess('Password updated! Redirecting to login...');
+      setSuccess('Password updated! Redirecting...');
       setTimeout(() => onGoLogin(), 2000);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to reset password');
@@ -379,21 +599,14 @@ function ResetPasswordPage({ token, onGoLogin, API_URL }) {
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
             <div style={{ width: 52, height: 52, background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, margin: '0 auto 16px' }}>🔑</div>
             <h1 style={{ fontSize: 26, fontWeight: 600, color: '#e2e8f0', letterSpacing: '-0.02em', marginBottom: 6 }}>Set new password</h1>
-            <p style={{ color: '#4b5563', fontSize: 14 }}>Choose a strong password for your account</p>
           </div>
           <div className="card" style={{ padding: 28 }}>
             {error && <div className="error-msg">⚠️ {error}</div>}
             {success && <div className="success-msg">✓ {success}</div>}
             {!success && (
               <>
-                <div style={{ marginBottom: 16 }}>
-                  <label className="input-label">New password</label>
-                  <input className="auth-input" type="password" placeholder="Min. 6 characters" value={password} onChange={e => setPassword(e.target.value)} />
-                </div>
-                <div style={{ marginBottom: 20 }}>
-                  <label className="input-label">Confirm new password</label>
-                  <input className="auth-input" type="password" placeholder="••••••••" value={confirm} onChange={e => setConfirm(e.target.value)} />
-                </div>
+                <div style={{ marginBottom: 16 }}><label className="input-label">New password</label><input className="auth-input" type="password" placeholder="Min. 6 characters" value={password} onChange={e => setPassword(e.target.value)} /></div>
+                <div style={{ marginBottom: 20 }}><label className="input-label">Confirm new password</label><input className="auth-input" type="password" placeholder="••••••••" value={confirm} onChange={e => setConfirm(e.target.value)} /></div>
                 <button className="auth-btn" onClick={handleReset} disabled={loading}>
                   {loading ? <><span className="spinner" style={{ width: 16, height: 16, marginRight: 8 }}></span>Updating...</> : 'Update password →'}
                 </button>
@@ -407,7 +620,7 @@ function ResetPasswordPage({ token, onGoLogin, API_URL }) {
 }
 
 // ─── Profile Page ─────────────────────────────────────────
-function ProfilePage({ user, onBack, onLogout, API_URL }) {
+function ProfilePage({ user, credits, onBack, onLogout, onUpgrade, API_URL }) {
   const [tab, setTab] = useState('overview');
   const [profile, setProfile] = useState(null);
   const [history, setHistory] = useState([]);
@@ -433,9 +646,8 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
       setBio(res.data.profile.bio || '');
       setAvatarUrl(res.data.profile.avatar_url || '');
       setNotifications(res.data.profile.notifications_enabled ?? true);
-    } catch (err) {
-      console.error('Profile error:', err);
-    } finally { setLoading(false); }
+    } catch (err) { console.error('Profile error:', err); }
+    finally { setLoading(false); }
   };
 
   const handleSaveProfile = async () => {
@@ -443,9 +655,8 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
     try {
       await axios.post(`${API_URL}/api/profile/update`, { email: user.email, bio, avatar_url: avatarUrl, notifications_enabled: notifications });
       setMsg({ type: 'success', text: 'Profile updated successfully!' });
-    } catch (err) {
-      setMsg({ type: 'error', text: 'Failed to update profile' });
-    } finally { setSaving(false); }
+    } catch (err) { setMsg({ type: 'error', text: 'Failed to update profile' }); }
+    finally { setSaving(false); }
   };
 
   const handleAvatarChange = (e) => {
@@ -463,11 +674,10 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
     setSaving(true); setMsg({ type: '', text: '' });
     try {
       await axios.post(`${API_URL}/api/change-password`, { email: user.email, oldPassword, newPassword });
-      setMsg({ type: 'success', text: 'Password changed successfully!' });
+      setMsg({ type: 'success', text: 'Password changed!' });
       setOldPassword(''); setNewPassword(''); setConfirmPassword('');
-    } catch (err) {
-      setMsg({ type: 'error', text: err.response?.data?.error || 'Failed to change password' });
-    } finally { setSaving(false); }
+    } catch (err) { setMsg({ type: 'error', text: err.response?.data?.error || 'Failed' }); }
+    finally { setSaving(false); }
   };
 
   const handleDeleteAccount = async () => {
@@ -476,16 +686,12 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
     try {
       await axios.delete(`${API_URL}/api/delete-account`, { data: { email: user.email, password: deletePassword } });
       onLogout();
-    } catch (err) {
-      setMsg({ type: 'error', text: err.response?.data?.error || 'Failed to delete account' });
-    }
+    } catch (err) { setMsg({ type: 'error', text: err.response?.data?.error || 'Failed' }); }
   };
 
-  if (loading) return (
-    <div style={{ minHeight: '100vh', background: '#0a0e1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }}></div>
-    </div>
-  );
+  if (loading) return <div style={{ minHeight: '100vh', background: '#0a0e1a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div className="spinner" style={{ width: 32, height: 32, borderWidth: 3 }}></div></div>;
+
+  const planColors = { free: '#4b5563', pro: '#3b82f6', enterprise: '#8b5cf6' };
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e2e8f0', fontFamily: "'DM Sans', sans-serif" }}>
@@ -504,8 +710,6 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
       <div className="glow-line"></div>
 
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 24px' }}>
-
-        {/* Profile Header */}
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 24, flexWrap: 'wrap' }}>
           <div className="avatar-wrap" onClick={() => avatarInputRef.current?.click()}>
             {avatarUrl ? <img src={avatarUrl} alt="avatar" /> : user.name?.charAt(0).toUpperCase()}
@@ -515,72 +719,65 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
           <div style={{ flex: 1 }}>
             <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>{user.name}</h2>
             <p style={{ color: '#4b5563', fontSize: 14, marginBottom: 8 }}>{user.email}</p>
-            <span style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 6 }}>FREE PLAN</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ background: `${planColors[credits?.plan || 'free']}22`, color: planColors[credits?.plan || 'free'], fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 6, textTransform: 'uppercase' }}>{credits?.plan || 'free'} plan</span>
+              {credits?.plan !== 'enterprise' && (
+                <button onClick={onUpgrade} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 11, fontWeight: 600, padding: '3px 10px', cursor: 'pointer' }}>Upgrade ↑</button>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {[
-              { label: 'Analyses', value: profile?.total_analyses || 0 },
-              { label: 'Queries', value: history?.length || 0 },
+              { label: 'Queries Used', value: credits?.credits_used || 0 },
+              { label: 'Remaining', value: credits?.credits_remaining === 'unlimited' ? '∞' : credits?.credits_remaining || 0 },
+              { label: 'History', value: history?.length || 0 },
             ].map(s => (
               <div key={s.label} className="stat-card" style={{ minWidth: 80 }}>
-                <p style={{ fontSize: 28, fontWeight: 700, color: '#3b82f6', marginBottom: 4 }}>{s.value}</p>
+                <p style={{ fontSize: 24, fontWeight: 700, color: '#3b82f6', marginBottom: 4 }}>{s.value}</p>
                 <p style={{ fontSize: 11, color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 24, background: '#111827', borderRadius: 10, padding: 4, border: '1px solid #1e293b' }}>
           {[['overview', '👤 Overview'], ['history', '📋 History'], ['settings', '⚙️ Settings']].map(([t, label]) => (
             <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => { setTab(t); setMsg({ type: '', text: '' }); }} style={{ flex: 1 }}>{label}</button>
           ))}
         </div>
 
-        {/* Messages */}
         {msg.text && (
           <div style={{ background: msg.type === 'success' ? '#052011' : '#1a0505', border: `1px solid ${msg.type === 'success' ? '#064e1e' : '#450a0a'}`, borderRadius: 8, padding: '10px 16px', color: msg.type === 'success' ? '#34d399' : '#f87171', fontSize: 13, marginBottom: 16 }}>
             {msg.type === 'success' ? '✓' : '⚠️'} {msg.text}
           </div>
         )}
 
-        {/* OVERVIEW */}
         {tab === 'overview' && (
           <div className="fade-in">
             <div className="card" style={{ marginBottom: 16 }}>
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Personal Info</p>
-              <div style={{ marginBottom: 16 }}>
-                <label className="input-label">Full Name</label>
-                <div style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', color: '#64748b', fontSize: 14 }}>{user.name}</div>
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <label className="input-label">Email</label>
-                <div style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', color: '#64748b', fontSize: 14 }}>{user.email}</div>
-              </div>
+              <div style={{ marginBottom: 16 }}><label className="input-label">Full Name</label><div style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', color: '#64748b', fontSize: 14 }}>{user.name}</div></div>
+              <div style={{ marginBottom: 16 }}><label className="input-label">Email</label><div style={{ background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', color: '#64748b', fontSize: 14 }}>{user.email}</div></div>
               <div style={{ marginBottom: 20 }}>
                 <label className="input-label">Bio</label>
                 <textarea value={bio} onChange={e => setBio(e.target.value)} placeholder="Tell us about yourself..." rows={3}
                   style={{ width: '100%', background: '#0a0e1a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', color: '#e2e8f0', fontSize: 14, fontFamily: "'DM Sans', sans-serif", outline: 'none', resize: 'vertical' }} />
               </div>
-              <button className="auth-btn" onClick={handleSaveProfile} disabled={saving} style={{ marginTop: 0 }}>
-                {saving ? 'Saving...' : 'Save Changes'}
-              </button>
+              <button className="auth-btn" onClick={handleSaveProfile} disabled={saving} style={{ marginTop: 0 }}>{saving ? 'Saving...' : 'Save Changes'}</button>
             </div>
             <div className="card">
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Recent Activity</p>
-              {history.length === 0 ? (
-                <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No analyses yet — upload a CSV to get started!</p>
-              ) : history.slice(0, 5).map((h, i) => (
-                <div key={i} className="history-card">
-                  <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 4 }}>💬 {h.question}</p>
-                  <p style={{ color: '#374151', fontSize: 11 }}>{new Date(h.created_at).toLocaleDateString()} · {h.rows_returned} rows returned</p>
-                </div>
-              ))}
+              {history.length === 0 ? <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No analyses yet!</p> :
+                history.slice(0, 5).map((h, i) => (
+                  <div key={i} className="history-card">
+                    <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 4 }}>💬 {h.question}</p>
+                    <p style={{ color: '#374151', fontSize: 11 }}>{new Date(h.created_at).toLocaleDateString()} · {h.rows_returned} rows</p>
+                  </div>
+                ))}
             </div>
           </div>
         )}
 
-        {/* HISTORY */}
         {tab === 'history' && (
           <div className="fade-in">
             <div className="card">
@@ -588,67 +785,42 @@ function ProfilePage({ user, onBack, onLogout, API_URL }) {
                 <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Analysis History</p>
                 <span style={{ color: '#374151', fontSize: 12 }}>{history.length} total</span>
               </div>
-              {history.length === 0 ? (
-                <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '40px 0' }}>No analyses yet!</p>
-              ) : history.map((h, i) => (
-                <div key={i} className="history-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                    <p style={{ color: '#94a3b8', fontSize: 13, flex: 1, marginRight: 12 }}>💬 {h.question}</p>
-                    <span style={{ color: '#374151', fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(h.created_at).toLocaleDateString()}</span>
+              {history.length === 0 ? <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '40px 0' }}>No analyses yet!</p> :
+                history.map((h, i) => (
+                  <div key={i} className="history-card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <p style={{ color: '#94a3b8', fontSize: 13, flex: 1, marginRight: 12 }}>💬 {h.question}</p>
+                      <span style={{ color: '#374151', fontSize: 11, whiteSpace: 'nowrap' }}>{new Date(h.created_at).toLocaleDateString()}</span>
+                    </div>
+                    {h.sql_generated && <pre style={{ background: '#0a0e1a', borderRadius: 6, padding: '8px 12px', fontSize: 11, color: '#7dd3fc', overflow: 'auto', margin: 0 }}>{h.sql_generated}</pre>}
+                    <p style={{ color: '#374151', fontSize: 11, marginTop: 8 }}>{h.rows_returned} rows returned</p>
                   </div>
-                  {h.sql_generated && (
-                    <pre style={{ background: '#0a0e1a', borderRadius: 6, padding: '8px 12px', fontSize: 11, color: '#7dd3fc', overflow: 'auto', margin: 0 }}>{h.sql_generated}</pre>
-                  )}
-                  <p style={{ color: '#374151', fontSize: 11, marginTop: 8 }}>{h.rows_returned} rows returned</p>
-                </div>
-              ))}
+                ))}
             </div>
           </div>
         )}
 
-        {/* SETTINGS */}
         {tab === 'settings' && (
           <div className="fade-in">
             <div className="card" style={{ marginBottom: 16 }}>
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Preferences</p>
               <div className="toggle-wrap">
-                <div>
-                  <p style={{ fontSize: 14, color: '#e2e8f0', marginBottom: 2 }}>Email Notifications</p>
-                  <p style={{ fontSize: 12, color: '#4b5563' }}>Receive updates and alerts via email</p>
-                </div>
-                <button className={`toggle ${notifications ? 'on' : 'off'}`} onClick={() => setNotifications(!notifications)}>
-                  <div className={`toggle-dot ${notifications ? 'on' : 'off'}`}></div>
-                </button>
+                <div><p style={{ fontSize: 14, color: '#e2e8f0', marginBottom: 2 }}>Email Notifications</p><p style={{ fontSize: 12, color: '#4b5563' }}>Receive updates via email</p></div>
+                <button className={`toggle ${notifications ? 'on' : 'off'}`} onClick={() => setNotifications(!notifications)}><div className={`toggle-dot ${notifications ? 'on' : 'off'}`}></div></button>
               </div>
-              <button className="auth-btn" onClick={handleSaveProfile} disabled={saving} style={{ marginTop: 16 }}>
-                {saving ? 'Saving...' : 'Save Preferences'}
-              </button>
+              <button className="auth-btn" onClick={handleSaveProfile} disabled={saving} style={{ marginTop: 16 }}>{saving ? 'Saving...' : 'Save Preferences'}</button>
             </div>
             <div className="card" style={{ marginBottom: 16 }}>
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>Change Password</p>
-              <div style={{ marginBottom: 12 }}>
-                <label className="input-label">Current Password</label>
-                <input className="auth-input" type="password" placeholder="••••••••" value={oldPassword} onChange={e => setOldPassword(e.target.value)} />
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                <label className="input-label">New Password</label>
-                <input className="auth-input" type="password" placeholder="Min. 6 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <label className="input-label">Confirm New Password</label>
-                <input className="auth-input" type="password" placeholder="••••••••" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
-              </div>
-              <button className="auth-btn" onClick={handleChangePassword} disabled={saving}>
-                {saving ? 'Updating...' : 'Update Password'}
-              </button>
+              <div style={{ marginBottom: 12 }}><label className="input-label">Current Password</label><input className="auth-input" type="password" placeholder="••••••••" value={oldPassword} onChange={e => setOldPassword(e.target.value)} /></div>
+              <div style={{ marginBottom: 12 }}><label className="input-label">New Password</label><input className="auth-input" type="password" placeholder="Min. 6 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)} /></div>
+              <div style={{ marginBottom: 16 }}><label className="input-label">Confirm New Password</label><input className="auth-input" type="password" placeholder="••••••••" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></div>
+              <button className="auth-btn" onClick={handleChangePassword} disabled={saving}>{saving ? 'Updating...' : 'Update Password'}</button>
             </div>
             <div className="card" style={{ borderColor: '#450a0a' }}>
               <p style={{ fontSize: 13, color: '#f87171', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>⚠️ Danger Zone</p>
               <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>Deleting your account is permanent and cannot be undone.</p>
-              <div style={{ marginBottom: 12 }}>
-                <label className="input-label">Enter password to confirm</label>
-                <input className="auth-input" type="password" placeholder="••••••••" value={deletePassword} onChange={e => setDeletePassword(e.target.value)} />
-              </div>
+              <div style={{ marginBottom: 12 }}><label className="input-label">Enter password to confirm</label><input className="auth-input" type="password" placeholder="••••••••" value={deletePassword} onChange={e => setDeletePassword(e.target.value)} /></div>
               <button className="danger-btn" onClick={handleDeleteAccount}>Delete My Account</button>
             </div>
           </div>
@@ -666,8 +838,10 @@ export default function App() {
 
   const [screen, setScreen] = useState(resetToken ? 'reset' : 'login');
   const [user, setUser] = useState(null);
+  const [credits, setCredits] = useState(null);
   const [tableName, setTableName] = useState(null);
   const [csvInfo, setCsvInfo] = useState(null);
+  const [csvFiles, setCsvFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -676,11 +850,38 @@ export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
+  const [activeTab, setActiveTab] = useState('results');
   const fileRef = useRef(null);
 
-  const handleLogin = (u) => { setUser(u); setScreen('upload'); };
-  const handleSignup = (u) => { setUser(u); setScreen('upload'); };
-  const handleLogout = () => { setUser(null); setScreen('login'); setData(null); setHistory([]); setCsvInfo(null); setTableName(null); };
+  const fetchCredits = async (email) => {
+    try {
+      const res = await axios.get(`${API_URL}/api/credits/${email}`);
+      setCredits(res.data);
+    } catch (err) { console.error('Credits error:', err); }
+  };
+
+  const handleLogin = (u) => {
+    setUser(u);
+    setScreen('upload');
+    fetchCredits(u.email);
+  };
+
+  const handleSignup = (u) => {
+    setUser(u);
+    setScreen('upload');
+    fetchCredits(u.email);
+  };
+
+  const handleLogout = () => {
+    setUser(null); setScreen('login'); setData(null);
+    setHistory([]); setCsvInfo(null); setTableName(null);
+    setCredits(null); setCsvFiles([]);
+  };
+
+  const handleUpgrade = (plan) => {
+    fetchCredits(user.email);
+    setScreen(csvInfo ? 'chat' : 'upload');
+  };
 
   const handleFile = async (file) => {
     if (!file || !file.name.endsWith('.csv')) { setUploadError('Please upload a .csv file'); return; }
@@ -691,6 +892,7 @@ export default function App() {
       const res = await axios.post(`${API_URL}/api/upload`, formData);
       setCsvInfo(res.data);
       setTableName(res.data.tableName);
+      setCsvFiles(prev => [...prev.filter(f => f.name !== file.name), { name: file.name, ...res.data }]);
       setScreen('chat');
     } catch (err) {
       setUploadError(err.response?.data?.error || 'Upload failed');
@@ -700,21 +902,35 @@ export default function App() {
   const handleQuery = async (q) => {
     const query = q || question;
     if (!query.trim()) return;
-    setLoading(true); setError(null); setData(null);
+    setLoading(true); setError(null); setData(null); setActiveTab('results');
     try {
-      const res = await axios.post(`${API_URL}/api/query`, { question: query, tableName });
+      const res = await axios.post(`${API_URL}/api/query`, {
+        question: query, tableName, email: user?.email
+      });
+
+      if (res.data.upgrade_required) {
+        setError('Credit limit reached! Please upgrade your plan.');
+        setScreen('upgrade');
+        return;
+      }
+
       setData(res.data);
       setHistory(h => [{ question: query, time: new Date().toLocaleTimeString() }, ...h.slice(0, 4)]);
       if (user?.email) {
         await axios.post(`${API_URL}/api/save-analysis`, {
-          email: user.email,
-          question: query,
+          email: user.email, question: query,
           sql_generated: res.data.sql,
           rows_returned: res.data.results?.length || 0
         }).catch(() => {});
+        fetchCredits(user.email);
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      if (err.response?.data?.upgrade_required) {
+        setError('Credit limit reached! Please upgrade your plan.');
+        setScreen('upgrade');
+      } else {
+        setError(err.response?.data?.error || 'Something went wrong');
+      }
     } finally { setLoading(false); }
   };
 
@@ -722,12 +938,13 @@ export default function App() {
   if (screen === 'signup') return <><style>{STYLES}</style><SignupPage onSignup={handleSignup} onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
   if (screen === 'forgot') return <><style>{STYLES}</style><ForgotPasswordPage onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
   if (screen === 'reset') return <><style>{STYLES}</style><ResetPasswordPage token={resetToken} onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
-  if (screen === 'profile') return <><style>{STYLES}</style><ProfilePage user={user} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} onLogout={handleLogout} API_URL={API_URL} /></>;
+  if (screen === 'profile') return <><style>{STYLES}</style><ProfilePage user={user} credits={credits} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} onLogout={handleLogout} onUpgrade={() => setScreen('upgrade')} API_URL={API_URL} /></>;
+  if (screen === 'upgrade') return <><style>{STYLES}</style><UpgradePage user={user} credits={credits} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} onUpgrade={handleUpgrade} API_URL={API_URL} /></>;
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e2e8f0', fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
       <style>{STYLES}</style>
-      <Topbar user={user} onLogout={handleLogout} showStatus={screen === 'chat'} rowCount={csvInfo?.rowCount} onProfile={() => setScreen('profile')} />
+      <Topbar user={user} onLogout={handleLogout} showStatus={screen === 'chat'} rowCount={csvInfo?.rowCount} onProfile={() => setScreen('profile')} onUpgrade={() => setScreen('upgrade')} credits={credits} />
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '40px 24px' }}>
 
@@ -764,11 +981,26 @@ export default function App() {
 
             {uploadError && <div style={{ marginTop: 16, background: '#1a0505', border: '1px solid #450a0a', borderRadius: 8, padding: '12px 16px', color: '#f87171', fontSize: 14 }}>⚠️ {uploadError}</div>}
 
+            {/* Recent CSV files */}
+            {csvFiles.length > 0 && (
+              <div style={{ marginTop: 24 }}>
+                <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>Recent Files</p>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {csvFiles.map((f, i) => (
+                    <button key={i} onClick={() => { setCsvInfo(f); setTableName(f.tableName); setScreen('chat'); }}
+                      style={{ background: '#111827', border: '1px solid #1e293b', borderRadius: 8, padding: '8px 16px', color: '#94a3b8', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      📄 {f.name} <span style={{ color: '#374151', fontSize: 11 }}>{f.rowCount} rows</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 40 }}>
               {[
                 { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
-                { icon: '🔍', title: 'Anomaly Detection', desc: 'AI spots outliers and trends automatically' },
-                { icon: '📊', title: 'Auto Charts', desc: 'Results visualized as interactive charts' }
+                { icon: '🔍', title: 'Anomaly Detection', desc: 'AI spots outliers automatically' },
+                { icon: '📊', title: 'Advanced Charts', desc: 'Trends, correlations, clusters' }
               ].map(f => (
                 <div key={f.title} className="card" style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 28, marginBottom: 10 }}>{f.icon}</div>
@@ -783,20 +1015,40 @@ export default function App() {
         {/* CHAT SCREEN */}
         {screen === 'chat' && (
           <div className="fade-in">
-            <div className="card" style={{ marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ fontSize: 24 }}>📄</span>
-                <div>
-                  <p style={{ fontWeight: 600, fontSize: 14 }}>CSV loaded successfully</p>
-                  <p style={{ color: '#4b5563', fontSize: 12 }}>{csvInfo?.rowCount} rows · {csvInfo?.columns?.length} columns: {csvInfo?.columns?.slice(0, 4).join(', ')}{csvInfo?.columns?.length > 4 ? '...' : ''}</p>
+            {/* CSV info + multiple file switcher */}
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ fontSize: 24 }}>📄</span>
+                  <div>
+                    <p style={{ fontWeight: 600, fontSize: 14 }}>CSV loaded successfully</p>
+                    <p style={{ color: '#4b5563', fontSize: 12 }}>{csvInfo?.rowCount} rows · {csvInfo?.columns?.length} columns</p>
+                  </div>
                 </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <span className="badge badge-green">✓ Ready</span>
-                <button onClick={() => { setScreen('upload'); setData(null); setHistory([]); }} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 8, color: '#94a3b8', fontSize: 12, padding: '6px 14px', cursor: 'pointer' }}>↑ Upload new CSV</button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="badge badge-green">✓ Ready</span>
+                  {csvFiles.length > 1 && csvFiles.map((f, i) => (
+                    <button key={i} onClick={() => { setCsvInfo(f); setTableName(f.tableName); setData(null); }}
+                      style={{ background: tableName === f.tableName ? '#1e293b' : 'transparent', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>
+                      📄 {f.name}
+                    </button>
+                  ))}
+                  <button onClick={() => { setScreen('upload'); setData(null); setHistory([]); }} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 8, color: '#94a3b8', fontSize: 12, padding: '6px 14px', cursor: 'pointer' }}>↑ Add CSV</button>
+                </div>
               </div>
             </div>
 
+            {/* Credit warning */}
+            {credits && credits.plan !== 'enterprise' && (
+              credits.credits_remaining <= 2 ? (
+                <div style={{ background: '#1a0a05', border: '1px solid #92400e', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#fbbf24', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>⚠️ Only {credits.credits_remaining} queries remaining this month!</span>
+                  <button onClick={() => setScreen('upgrade')} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '4px 12px', cursor: 'pointer' }}>Upgrade Now</button>
+                </div>
+              ) : null
+            )}
+
+            {/* Input */}
             <div style={{ marginBottom: 12 }}>
               <div className="input-wrap">
                 <span style={{ fontSize: 16, marginRight: 8 }}>💬</span>
@@ -815,7 +1067,7 @@ export default function App() {
               <div className="card fade-in" style={{ textAlign: 'center', padding: '40px 24px' }}>
                 <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3, margin: '0 auto 16px' }}></div>
                 <p style={{ color: '#94a3b8', fontSize: 15, marginBottom: 4 }}>Analyzing your data...</p>
-                <p style={{ color: '#4b5563', fontSize: 13 }}>Generating SQL → Running query → Detecting anomalies → Explaining results</p>
+                <p style={{ color: '#4b5563', fontSize: 13 }}>Generating SQL → Running query → AI analysis → Results</p>
               </div>
             )}
 
@@ -828,16 +1080,81 @@ export default function App() {
 
             {data && !loading && (
               <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                {/* Summary */}
                 <div className="card" style={{ borderColor: 'rgba(59,130,246,0.3)' }}>
-                  <div style={{ marginBottom: 12 }}><span className="badge badge-blue">📊 Summary</span></div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <span className="badge badge-blue">📊 Summary</span>
+                    <button onClick={() => exportToPDF(data, question)}
+                      style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '4px 12px', cursor: 'pointer' }}>
+                      📄 Export PDF
+                    </button>
+                  </div>
                   <p style={{ color: '#cbd5e1', lineHeight: 1.7, fontSize: 15 }}>{data.explanation}</p>
                 </div>
+
+                {/* Anomalies */}
                 {data.anomalies && (
                   <div className="card" style={{ borderColor: 'rgba(245,158,11,0.3)' }}>
                     <div style={{ marginBottom: 12 }}><span className="badge badge-amber">⚠️ Anomalies</span></div>
                     <p style={{ color: '#cbd5e1', lineHeight: 1.7, fontSize: 14, whiteSpace: 'pre-line' }}>{data.anomalies}</p>
                   </div>
                 )}
+
+                {/* Advanced Analysis Tabs */}
+                {(data.trends?.length > 0 || data.correlations?.length > 0 || data.clusters?.length > 0) && (
+                  <div className="card">
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#0d1117', borderRadius: 8, padding: 4 }}>
+                      {[['results', '📋 Results'], ['trends', '📈 Trends'], ['correlations', '🔗 Correlations'], ['clusters', '🔵 Clusters']].map(([t, label]) => (
+                        <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)} style={{ flex: 1, fontSize: 12 }}>{label}</button>
+                      ))}
+                    </div>
+
+                    {activeTab === 'results' && (
+                      <div>
+                        <ChartView data={data.results} />
+                        {data.results?.length > 0 && (
+                          <div style={{ marginTop: 16 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                              <span className="badge badge-green">📋 Data</span>
+                              <span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span>
+                            </div>
+                            <ResultsTable data={data.results} />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {activeTab === 'trends' && (
+                      <div>
+                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Column trends over the dataset</p>
+                        <TrendChart trends={data.trends} />
+                      </div>
+                    )}
+
+                    {activeTab === 'correlations' && (
+                      <div>
+                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Relationships between numeric columns</p>
+                        <CorrelationHeatmap correlations={data.correlations} />
+                        {(!data.correlations || data.correlations.length === 0) && (
+                          <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No strong correlations found in this query result</p>
+                        )}
+                      </div>
+                    )}
+
+                    {activeTab === 'clusters' && (
+                      <div>
+                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Natural groupings in your data</p>
+                        <ClusterViz clusters={data.clusters} />
+                        {(!data.clusters || data.clusters.length === 0) && (
+                          <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>Need at least 2 numeric columns for clustering</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* SQL */}
                 <details className="card">
                   <summary style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span className="badge badge-green">🔍 Generated SQL</span>
@@ -845,20 +1162,19 @@ export default function App() {
                   </summary>
                   <div style={{ marginTop: 14 }}><pre className="sql-block">{data.sql}</pre></div>
                 </details>
-                {data.results?.length > 0 && (
-                  <div className="card">
-                    <div style={{ marginBottom: 14 }}><span className="badge badge-blue">📈 Chart</span></div>
-                    <ChartView data={data.results} />
-                  </div>
-                )}
-                {data.results?.length > 0 && (
-                  <div className="card">
-                    <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span className="badge badge-green">📋 Results</span>
-                      <span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span>
+
+                {/* Simple results if no advanced tabs */}
+                {!(data.trends?.length > 0 || data.correlations?.length > 0 || data.clusters?.length > 0) && data.results?.length > 0 && (
+                  <>
+                    <div className="card"><div style={{ marginBottom: 14 }}><span className="badge badge-blue">📈 Chart</span></div><ChartView data={data.results} /></div>
+                    <div className="card">
+                      <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span className="badge badge-green">📋 Results</span>
+                        <span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span>
+                      </div>
+                      <ResultsTable data={data.results} />
                     </div>
-                    <ResultsTable data={data.results} />
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -868,9 +1184,7 @@ export default function App() {
                 <p style={{ color: '#374151', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Recent queries</p>
                 {history.map((h, i) => (
                   <div key={i} className="history-item" onClick={() => { setQuestion(h.question); handleQuery(h.question); }}>
-                    <span style={{ color: '#374151' }}>↩</span>
-                    <span style={{ flex: 1 }}>{h.question}</span>
-                    <span style={{ fontSize: 11 }}>{h.time}</span>
+                    <span style={{ color: '#374151' }}>↩</span><span style={{ flex: 1 }}>{h.question}</span><span style={{ fontSize: 11 }}>{h.time}</span>
                   </div>
                 ))}
               </div>
