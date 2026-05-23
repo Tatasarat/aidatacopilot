@@ -5,6 +5,7 @@ require('dotenv').config();
 const queryRoute = require('./src/routes/query');
 const uploadRoute = require('./src/routes/upload');
 const authRoute = require('./src/routes/auth');
+const paymentRoute = require('./src/routes/payment');
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use(express.json());
 app.use('/api', authRoute);
 app.use('/api', uploadRoute);
 app.use('/api', queryRoute);
+app.use('/api', paymentRoute);
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {

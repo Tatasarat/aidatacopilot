@@ -126,19 +126,88 @@ function CreditsBar({ credits, onUpgrade }) {
 
 // ─── Upgrade Page ─────────────────────────────────────────
 function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
-  const [upgrading, setUpgrading] = useState('');
-  const [msg, setMsg] = useState('');
+  const [loading, setLoading] = useState('');
+  const [msg, setMsg] = useState({ type: '', text: '' });
+  const [paymentHistory, setPaymentHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
 
-  const handleUpgrade = async (plan) => {
-    setUpgrading(plan);
+  useEffect(() => {
+    fetchPaymentHistory();
+    // Load Razorpay script
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+    return () => document.body.removeChild(script);
+  }, []);
+
+  const fetchPaymentHistory = async () => {
     try {
-      await axios.post(`${API_URL}/api/upgrade-plan`, { email: user.email, plan });
-      setMsg(`Successfully upgraded to ${plan}!`);
-      onUpgrade(plan);
-    } catch (err) {
-      setMsg('Upgrade failed. Please try again.');
-    } finally { setUpgrading(''); }
+      const res = await axios.get(`${API_URL}/api/payment-history/${user.email}`);
+      setPaymentHistory(res.data.payments || []);
+    } catch (err) { console.error('Payment history error:', err); }
   };
+
+  const handlePayment = async (plan) => {
+    setLoading(plan);
+    setMsg({ type: '', text: '' });
+    try {
+      // Create order
+      const orderRes = await axios.post(`${API_URL}/api/create-order`, {
+        plan, email: user.email
+      });
+
+      const { order_id, amount, currency, name, key_id } = orderRes.data;
+
+      // Open Razorpay
+      const options = {
+        key: key_id || process.env.REACT_APP_RAZORPAY_KEY_ID,
+        amount,
+        currency,
+        name: 'InsightAI',
+        description: name,
+        order_id,
+        prefill: {
+          name: user.name,
+          email: user.email,
+        },
+        theme: { color: '#3b82f6' },
+        handler: async (response) => {
+          try {
+            // Verify payment
+            const verifyRes = await axios.post(`${API_URL}/api/verify-payment`, {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              email: user.email,
+              plan
+            });
+
+            if (verifyRes.data.success) {
+              setMsg({ type: 'success', text: `🎉 Successfully upgraded to ${plan}! Your credits have been updated.` });
+              fetchPaymentHistory();
+              onUpgrade(plan);
+            }
+          } catch (err) {
+            setMsg({ type: 'error', text: 'Payment verification failed. Please contact support.' });
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setLoading('');
+            setMsg({ type: 'error', text: 'Payment cancelled.' });
+          }
+        }
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (err) {
+      setMsg({ type: 'error', text: err.response?.data?.error || 'Payment failed' });
+    } finally { setLoading(''); }
+  };
+
+  const planColors = { free: '#4b5563', pro: '#3b82f6', enterprise: '#8b5cf6' };
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e2e8f0', fontFamily: "'DM Sans', sans-serif" }}>
@@ -155,23 +224,52 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '48px 24px' }}>
         <div style={{ textAlign: 'center', marginBottom: 48 }}>
-          <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-0.03em', marginBottom: 12 }}>
-            Choose your plan
-          </h1>
-          <p style={{ color: '#4b5563', fontSize: 15 }}>Unlock more queries and advanced features</p>
-          {msg && <div className="success-msg" style={{ display: 'inline-block', marginTop: 16 }}>✓ {msg}</div>}
+          <h1 style={{ fontSize: 36, fontWeight: 600, letterSpacing: '-0.03em', marginBottom: 12 }}>Choose your plan</h1>
+          <p style={{ color: '#4b5563', fontSize: 15 }}>Secure payments powered by Razorpay</p>
+          {msg.text && (
+            <div style={{ background: msg.type === 'success' ? '#052011' : '#1a0505', border: `1px solid ${msg.type === 'success' ? '#064e1e' : '#450a0a'}`, borderRadius: 8, padding: '12px 20px', color: msg.type === 'success' ? '#34d399' : '#f87171', fontSize: 14, display: 'inline-block', marginTop: 16 }}>
+              {msg.text}
+            </div>
+          )}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+        {/* Current plan banner */}
+        {credits && (
+          <div className="card" style={{ marginBottom: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, borderColor: planColors[credits.plan] }}>
+            <div>
+              <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 4 }}>Current Plan</p>
+              <p style={{ fontSize: 20, fontWeight: 700, color: planColors[credits.plan], textTransform: 'capitalize' }}>{credits.plan}</p>
+            </div>
+            <div style={{ display: 'flex', gap: 24 }}>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ fontSize: 22, fontWeight: 700, color: '#3b82f6' }}>{credits.credits_used}</p>
+                <p style={{ fontSize: 11, color: '#4b5563' }}>Used</p>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ fontSize: 22, fontWeight: 700, color: '#34d399' }}>{credits.credits_remaining === 'unlimited' ? '∞' : credits.credits_remaining}</p>
+                <p style={{ fontSize: 11, color: '#4b5563' }}>Remaining</p>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <p style={{ fontSize: 22, fontWeight: 700, color: '#94a3b8' }}>{credits.credits_limit === 999999 ? '∞' : credits.credits_limit}</p>
+                <p style={{ fontSize: 11, color: '#4b5563' }}>Total/month</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Plan cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 40 }}>
           {Object.entries(PLANS).map(([key, plan]) => (
             <div key={key} className={`plan-card ${credits?.plan === key ? 'current' : ''}`}
-              style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b' }}>
+              style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b', position: 'relative' }}>
               {key === 'pro' && (
-                <div style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, color: 'white', display: 'inline-block', marginBottom: 12 }}>MOST POPULAR</div>
+                <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 20, padding: '3px 14px', fontSize: 11, fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>MOST POPULAR</div>
               )}
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4, color: plan.color }}>{plan.name}</h2>
-              <p style={{ fontSize: 28, fontWeight: 700, marginBottom: 4 }}>{plan.price}</p>
-              <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>{plan.queries} queries/month</p>
+              <p style={{ fontSize: 32, fontWeight: 700, marginBottom: 2 }}>
+                {key === 'free' ? '₹0' : key === 'pro' ? '₹999' : '₹4,999'}
+              </p>
+              <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>/month · {plan.queries} queries</p>
               <div style={{ marginBottom: 24 }}>
                 {plan.features.map(f => (
                   <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -181,21 +279,61 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
                 ))}
               </div>
               {credits?.plan === key ? (
-                <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>Current Plan</div>
+                <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>✓ Current Plan</div>
+              ) : key === 'free' ? (
+                <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>Free Forever</div>
               ) : (
-                <button onClick={() => handleUpgrade(key)} disabled={upgrading === key}
-                  style={{ width: '100%', background: `linear-gradient(135deg, ${plan.color}, ${plan.color}dd)`, border: 'none', borderRadius: 8, color: 'white', fontSize: 14, fontWeight: 600, padding: '12px', cursor: 'pointer' }}>
-                  {upgrading === key ? 'Upgrading...' : `Get ${plan.name}`}
+                <button
+                  onClick={() => handlePayment(key)}
+                  disabled={loading === key}
+                  style={{ width: '100%', background: `linear-gradient(135deg, ${plan.color}, ${plan.color}cc)`, border: 'none', borderRadius: 8, color: 'white', fontSize: 14, fontWeight: 600, padding: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  {loading === key ? (
+                    <><span className="spinner" style={{ width: 16, height: 16 }}></span>Processing...</>
+                  ) : (
+                    <>🔒 Pay {key === 'pro' ? '₹999' : '₹4,999'}/mo</>
+                  )}
                 </button>
               )}
             </div>
           ))}
         </div>
+
+        {/* Security badges */}
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 40, flexWrap: 'wrap' }}>
+          {['🔒 256-bit SSL Encryption', '🏦 Razorpay Secured', '↩ Cancel Anytime', '📱 UPI, Cards, NetBanking'].map(b => (
+            <div key={b} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#4b5563' }}>{b}</div>
+          ))}
+        </div>
+
+        {/* Payment History */}
+        {paymentHistory.length > 0 && (
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment History</p>
+              <button onClick={() => setShowHistory(!showHistory)} style={{ background: 'transparent', border: 'none', color: '#3b82f6', fontSize: 13, cursor: 'pointer' }}>
+                {showHistory ? 'Hide' : 'Show'} ({paymentHistory.length})
+              </button>
+            </div>
+            {showHistory && paymentHistory.map((p, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid #0d1117' }}>
+                <div>
+                  <p style={{ fontSize: 14, color: '#94a3b8', fontWeight: 500, textTransform: 'capitalize' }}>{p.plan} Plan</p>
+                  <p style={{ fontSize: 11, color: '#374151', marginTop: 2 }}>{new Date(p.created_at).toLocaleDateString()} · {p.payment_id || 'Pending'}</p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: '#e2e8f0' }}>₹{(p.amount / 100).toLocaleString()}</p>
+                  <span style={{ fontSize: 11, background: p.status === 'paid' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: p.status === 'paid' ? '#34d399' : '#fbbf24', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+                    {p.status === 'paid' ? '✓ Paid' : '⏳ Pending'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
-
 // ─── Correlation Heatmap ──────────────────────────────────
 function CorrelationHeatmap({ correlations }) {
   if (!correlations || !correlations.length) return null;
