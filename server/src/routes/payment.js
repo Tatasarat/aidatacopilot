@@ -4,6 +4,9 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const { pool } = require('../db/postgres');
 
+console.log('Razorpay Key ID:', process.env.RAZORPAY_KEY_ID ? 'Found ✓' : 'MISSING ✗');
+console.log('Razorpay Secret:', process.env.RAZORPAY_KEY_SECRET ? 'Found ✓' : 'MISSING ✗');
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -14,37 +17,51 @@ const PLANS = {
   enterprise: { amount: 499900, name: 'InsightAI Enterprise', credits: 999999 },
 };
 
+// ── Create payments table ─────────────────────────────────
+async function ensurePaymentsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      plan TEXT NOT NULL,
+      order_id TEXT UNIQUE NOT NULL,
+      payment_id TEXT,
+      amount INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+}
+
 // ── Create Order ──────────────────────────────────────────
 router.post('/create-order', async (req, res) => {
   const { plan, email } = req.body;
-  if (!plan || !PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
+  console.log('Create order request:', { plan, email });
+
+  if (!plan || !PLANS[plan]) {
+    return res.status(400).json({ error: 'Invalid plan' });
+  }
+  if (!email) {
+    return res.status(400).json({ error: 'Email required' });
+  }
 
   try {
+    console.log('Creating Razorpay order...');
     const order = await razorpay.orders.create({
       amount: PLANS[plan].amount,
       currency: 'INR',
-      receipt: `receipt_${email}_${Date.now()}`,
+      receipt: `rcpt_${Date.now()}`,
       notes: { email, plan }
     });
+    console.log('Order created:', order.id);
 
-    // Save pending order to DB
+    await ensurePaymentsTable();
+
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        plan TEXT NOT NULL,
-        order_id TEXT UNIQUE NOT NULL,
-        payment_id TEXT,
-        amount INTEGER NOT NULL,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-
-    await pool.query(
-      'INSERT INTO payments (email, plan, order_id, amount) VALUES ($1, $2, $3, $4)',
-      [email, plan, order.id, PLANS[plan].amount]
-    );
+      INSERT INTO payments (email, plan, order_id, amount)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (order_id) DO NOTHING
+    `, [email, plan, order.id, PLANS[plan].amount]);
 
     res.json({
       order_id: order.id,
@@ -56,7 +73,8 @@ router.post('/create-order', async (req, res) => {
     });
   } catch (err) {
     console.error('Create order error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Full error:', JSON.stringify(err));
+    res.status(500).json({ error: err.message || 'Order creation failed' });
   }
 });
 
@@ -65,7 +83,6 @@ router.post('/verify-payment', async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, email, plan } = req.body;
 
   try {
-    // Verify signature
     const body = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -76,13 +93,13 @@ router.post('/verify-payment', async (req, res) => {
       return res.status(400).json({ error: 'Invalid payment signature' });
     }
 
-    // Update payment status
+    await ensurePaymentsTable();
+
     await pool.query(
       'UPDATE payments SET payment_id = $1, status = $2 WHERE order_id = $3',
       [razorpay_payment_id, 'paid', razorpay_order_id]
     );
 
-    // Upgrade user plan
     const limits = { pro: 100, enterprise: 999999 };
     await pool.query(`
       INSERT INTO user_credits (email, plan, credits_used, credits_limit)
@@ -91,13 +108,6 @@ router.post('/verify-payment', async (req, res) => {
       SET plan = $2, credits_limit = $3, credits_used = 0,
           reset_date = DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
     `, [email, plan, limits[plan]]);
-
-    // Save to profile
-    await pool.query(`
-      INSERT INTO user_profiles (email)
-      VALUES ($1)
-      ON CONFLICT (email) DO NOTHING
-    `, [email]);
 
     res.json({
       success: true,
@@ -115,18 +125,7 @@ router.post('/verify-payment', async (req, res) => {
 router.get('/payment-history/:email', async (req, res) => {
   const { email } = req.params;
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        plan TEXT NOT NULL,
-        order_id TEXT UNIQUE NOT NULL,
-        payment_id TEXT,
-        amount INTEGER NOT NULL,
-        status TEXT DEFAULT 'pending',
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
+    await ensurePaymentsTable();
     const result = await pool.query(
       'SELECT * FROM payments WHERE email = $1 ORDER BY created_at DESC LIMIT 10',
       [email]
