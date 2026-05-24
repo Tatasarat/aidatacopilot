@@ -73,9 +73,13 @@ router.post('/create-order', async (req, res) => {
     });
   } catch (err) {
     console.error('Create order error:', err.message);
-    console.error('Full error:', JSON.stringify(err));
-    res.status(500).json({ error: err.message || 'Order creation failed' });
-  }
+    console.error('Error status:', err.statusCode);
+    console.error('Error description:', err.error?.description);
+    console.error('Full error:', JSON.stringify(err, null, 2));
+    res.status(500).json({ 
+      error: err.error?.description || err.message || 'Order creation failed',
+      details: JSON.stringify(err)
+    });}
 });
 
 // ── Verify Payment ────────────────────────────────────────
