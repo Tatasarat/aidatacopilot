@@ -161,7 +161,7 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
 
       // Open Razorpay
       const options = {
-        key: key_id || process.env.REACT_APP_RAZORPAY_KEY_ID,
+        key: key_id,
         amount,
         currency,
         name: 'InsightAI',
