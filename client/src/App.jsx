@@ -12,9 +12,9 @@ const suggestions = [
 ];
 
 const PLANS = {
-  free: { name: 'Free', price: '$0/mo', queries: 10, color: '#4b5563', features: ['10 queries/month', 'Basic analysis', 'CSV upload', 'Bar charts'] },
-  pro: { name: 'Pro', price: '$19/mo', queries: 100, color: '#3b82f6', features: ['100 queries/month', 'Advanced analysis', 'Multiple CSVs', 'PDF export', 'Trend charts', 'Correlation heatmap'] },
-  enterprise: { name: 'Enterprise', price: '$99/mo', queries: 'Unlimited', color: '#8b5cf6', features: ['Unlimited queries', 'All Pro features', 'Priority support', 'Custom models', 'API access'] },
+  free: { name: 'Free', price: '₹0/mo', queries: 10, color: '#4b5563', features: ['10 queries/month', 'Basic analysis', 'CSV upload', 'Bar charts', 'Voice input'] },
+  pro: { name: 'Pro', price: '₹999/mo', queries: 100, color: '#3b82f6', features: ['100 queries/month', 'Advanced analysis', 'Multiple CSVs', 'PDF export', 'Trend charts', 'Correlation heatmap', 'Voice input'] },
+  enterprise: { name: 'Enterprise', price: '₹4,999/mo', queries: 'Unlimited', color: '#8b5cf6', features: ['Unlimited queries', 'All Pro features', 'Priority support', 'Custom models', 'API access', 'Voice input'] },
 };
 
 const STYLES = `
@@ -55,6 +55,7 @@ const STYLES = `
   .pulse-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
   @keyframes micPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.15)} }
+  @keyframes soundBar { 0%,100%{height:4px} 50%{height:20px} }
   .auth-input { width: 100%; background: #0a0e1a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; color: #e2e8f0; font-size: 14px; font-family: 'DM Sans', sans-serif; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
   .auth-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
   .auth-input::placeholder { color: #374151; }
@@ -90,8 +91,8 @@ const STYLES = `
   .plan-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
   .plan-card.current { border-color: #3b82f6; background: rgba(59,130,246,0.05); }
   .mic-btn { background: #1e293b; border: none; border-radius: 8px; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; margin-right: 6px; font-size: 16px; flex-shrink: 0; transition: all 0.2s; }
-  .mic-btn.listening { background: linear-gradient(135deg, #ef4444, #dc2626); animation: micPulse 1s ease-in-out infinite; }
   .mic-btn:hover { background: #2d3748; }
+  .mic-btn.listening { background: linear-gradient(135deg, #ef4444, #dc2626); animation: micPulse 1s ease-in-out infinite; }
 `;
 
 // ─── Credits Bar ──────────────────────────────────────────
@@ -153,7 +154,6 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
     try {
       const orderRes = await axios.post(`${API_URL}/api/create-order`, { plan, email: user.email });
       const { order_id, amount, currency, name, key_id } = orderRes.data;
-
       const options = {
         key: key_id,
         amount, currency,
@@ -175,13 +175,10 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
               fetchPaymentHistory();
               onUpgrade(plan);
             }
-          } catch (err) {
-            setMsg({ type: 'error', text: 'Payment verification failed.' });
-          }
+          } catch (err) { setMsg({ type: 'error', text: 'Payment verification failed.' }); }
         },
         modal: { ondismiss: () => { setLoading(''); setMsg({ type: 'error', text: 'Payment cancelled.' }); } }
       };
-
       const rzp = new window.Razorpay(options);
       rzp.open();
     } catch (err) {
@@ -237,8 +234,8 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
             <div key={key} className={`plan-card ${credits?.plan === key ? 'current' : ''}`} style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b', position: 'relative' }}>
               {key === 'pro' && <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 20, padding: '3px 14px', fontSize: 11, fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>MOST POPULAR</div>}
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4, color: plan.color }}>{plan.name}</h2>
-              <p style={{ fontSize: 32, fontWeight: 700, marginBottom: 2 }}>{key === 'free' ? '₹0' : key === 'pro' ? '₹999' : '₹4,999'}</p>
-              <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>/month · {plan.queries} queries</p>
+              <p style={{ fontSize: 32, fontWeight: 700, marginBottom: 2 }}>{plan.price}</p>
+              <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>{plan.queries} queries/month</p>
               <div style={{ marginBottom: 24 }}>
                 {plan.features.map(f => (
                   <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -254,7 +251,7 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
               ) : (
                 <button onClick={() => handlePayment(key)} disabled={loading === key}
                   style={{ width: '100%', background: `linear-gradient(135deg, ${plan.color}, ${plan.color}cc)`, border: 'none', borderRadius: 8, color: 'white', fontSize: 14, fontWeight: 600, padding: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                  {loading === key ? <><span className="spinner" style={{ width: 16, height: 16 }}></span>Processing...</> : <>🔒 Pay {key === 'pro' ? '₹999' : '₹4,999'}/mo</>}
+                  {loading === key ? <><span className="spinner" style={{ width: 16, height: 16 }}></span>Processing...</> : <>🔒 Pay {plan.price}</>}
                 </button>
               )}
             </div>
@@ -713,10 +710,18 @@ function ProfilePage({ user, credits, onBack, onLogout, onUpgrade, API_URL }) {
   const handleSaveProfile = async () => {
     setSaving(true); setMsg({ type: '', text: '' });
     try {
-      await axios.post(`${API_URL}/api/profile/update`, { email: user.email, bio, avatar_url: avatarUrl, notifications_enabled: notifications });
+      const avatarToSave = avatarUrl && avatarUrl.length > 500000 ? '' : avatarUrl;
+      await axios.post(`${API_URL}/api/profile/update`, {
+        email: user.email,
+        bio: bio || '',
+        avatar_url: avatarToSave || '',
+        notifications_enabled: notifications
+      });
       setMsg({ type: 'success', text: 'Profile updated successfully!' });
-    } catch (err) { setMsg({ type: 'error', text: 'Failed to update profile' }); }
-    finally { setSaving(false); }
+    } catch (err) {
+      console.error('Profile update error:', err.response?.data);
+      setMsg({ type: 'error', text: err.response?.data?.error || 'Failed to update profile' });
+    } finally { setSaving(false); }
   };
 
   const handleAvatarChange = (e) => {
@@ -914,6 +919,9 @@ export default function App() {
   const [listening, setListening] = useState(false);
   const fileRef = useRef(null);
   const recognitionRef = useRef(null);
+  const questionRef = useRef(question);
+
+  useEffect(() => { questionRef.current = question; }, [question]);
 
   const fetchCredits = async (email) => {
     try {
@@ -924,45 +932,62 @@ export default function App() {
 
   const handleLogin = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
   const handleSignup = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
-  const handleLogout = () => { setUser(null); setScreen('login'); setData(null); setHistory([]); setCsvInfo(null); setTableName(null); setCredits(null); setCsvFiles([]); };
-  const handleUpgrade = (plan) => { fetchCredits(user.email); setScreen(csvInfo ? 'chat' : 'upload'); };
+  const handleLogout = () => { setUser(null); setScreen('login'); setData(null); setHistory([]); setCsvInfo(null); setTableName(null); setCredits(null); setCsvFiles([]); if (listening) { recognitionRef.current?.stop(); setListening(false); } };
+  const handleUpgrade = () => { fetchCredits(user.email); setScreen(csvInfo ? 'chat' : 'upload'); };
 
-  // ── Voice to Text ────────────────────────────────────────
+  // ── Voice to Text ─────────────────────────────────────────
   const toggleListening = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       alert('Voice input not supported. Please use Chrome or Edge.');
       return;
     }
+
     if (listening) {
       recognitionRef.current?.stop();
       setListening(false);
       return;
     }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setListening(true);
+    recognition.onstart = () => {
+      setListening(true);
+      setQuestion('');
+    };
 
     recognition.onresult = (event) => {
-      let transcript = '';
+      let finalTranscript = '';
+      let interimTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
       }
-      setQuestion(transcript);
+      setQuestion(finalTranscript || interimTranscript);
     };
 
     recognition.onend = () => {
       setListening(false);
+      const currentQ = questionRef.current;
+      if (currentQ.trim()) {
+        setTimeout(() => handleQuery(currentQ), 300);
+      }
     };
 
     recognition.onerror = (event) => {
       setListening(false);
       if (event.error === 'not-allowed') {
         alert('Microphone access denied. Please allow microphone in browser settings.');
+      } else if (event.error === 'no-speech') {
+        alert('No speech detected. Please try again.');
       }
     };
 
@@ -1071,7 +1096,7 @@ export default function App() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 40 }}>
               {[
-                { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English or by voice' },
+                { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
                 { icon: '🎤', title: 'Voice Input', desc: 'Speak your question, AI understands' },
                 { icon: '📊', title: 'Advanced Charts', desc: 'Trends, correlations, clusters' }
               ].map(f => (
@@ -1094,7 +1119,7 @@ export default function App() {
                   <span style={{ fontSize: 24 }}>📄</span>
                   <div>
                     <p style={{ fontWeight: 600, fontSize: 14 }}>CSV loaded successfully</p>
-                    <p style={{ color: '#4b5563', fontSize: 12 }}>{csvInfo?.rowCount} rows · {csvInfo?.columns?.length} columns</p>
+                    <p style={{ color: '#4b5563', fontSize: 12 }}>{csvInfo?.rowCount} rows · {csvInfo?.columns?.length} columns: {csvInfo?.columns?.slice(0, 4).join(', ')}{csvInfo?.columns?.length > 4 ? '...' : ''}</p>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1113,7 +1138,7 @@ export default function App() {
             {/* Credit warning */}
             {credits && credits.plan !== 'enterprise' && credits.credits_remaining <= 2 && (
               <div style={{ background: '#1a0a05', border: '1px solid #92400e', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#fbbf24', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>⚠️ Only {credits.credits_remaining} queries remaining!</span>
+                <span>⚠️ Only {credits.credits_remaining} queries remaining this month!</span>
                 <button onClick={() => setScreen('upgrade')} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '4px 12px', cursor: 'pointer' }}>Upgrade Now</button>
               </div>
             )}
@@ -1126,24 +1151,39 @@ export default function App() {
                   className="main-input"
                   value={question}
                   onChange={e => setQuestion(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleQuery()}
+                  onKeyDown={e => e.key === 'Enter' && !listening && handleQuery()}
                   placeholder={listening ? '🎤 Listening... speak now' : 'Ask anything or click 🎤 to speak...'}
                 />
                 <button
                   className={`mic-btn ${listening ? 'listening' : ''}`}
                   onClick={toggleListening}
-                  title={listening ? 'Stop listening' : 'Voice input'}>
+                  title={listening ? 'Stop listening' : 'Start voice input'}>
                   {listening ? '⏹' : '🎤'}
                 </button>
                 <button className="ask-btn" disabled={loading || !question.trim()} onClick={() => handleQuery()}>
                   {loading ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Thinking</> : 'Ask AI →'}
                 </button>
               </div>
+
+              {/* Listening indicator */}
               {listening && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, padding: '6px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8 }}>
-                  <div style={{ width: 8, height: 8, background: '#ef4444', borderRadius: '50%', animation: 'micPulse 1s ease-in-out infinite' }}></div>
-                  <span style={{ fontSize: 12, color: '#f87171' }}>Listening... speak your question clearly</span>
-                  <span style={{ fontSize: 12, color: '#374151', marginLeft: 'auto' }}>Click ⏹ to stop</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, padding: '10px 16px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 10 }}>
+                  <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 24 }}>
+                    {[0.4, 0.7, 1, 0.7, 0.4, 0.8, 0.5].map((h, i) => (
+                      <div key={i} style={{
+                        width: 3,
+                        background: '#ef4444',
+                        borderRadius: 2,
+                        height: `${h * 20}px`,
+                        animation: `soundBar ${0.4 + i * 0.1}s ease-in-out infinite alternate`
+                      }} />
+                    ))}
+                  </div>
+                  <span style={{ fontSize: 13, color: '#f87171', fontWeight: 500 }}>🎤 Listening...</span>
+                  {question && <span style={{ fontSize: 12, color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>"{question}"</span>}
+                  <button onClick={toggleListening} style={{ background: '#ef4444', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '5px 12px', cursor: 'pointer', flexShrink: 0 }}>
+                    ⏹ Stop & Submit
+                  </button>
                 </div>
               )}
             </div>
@@ -1191,10 +1231,15 @@ export default function App() {
                         <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)} style={{ flex: 1, fontSize: 12 }}>{label}</button>
                       ))}
                     </div>
-                    {activeTab === 'results' && <div><ChartView data={data.results} />{data.results?.length > 0 && <div style={{ marginTop: 16 }}><ResultsTable data={data.results} /></div>}</div>}
-                    {activeTab === 'trends' && <TrendChart trends={data.trends} />}
-                    {activeTab === 'correlations' && <CorrelationHeatmap correlations={data.correlations} />}
-                    {activeTab === 'clusters' && <ClusterViz clusters={data.clusters} />}
+                    {activeTab === 'results' && (
+                      <div>
+                        <ChartView data={data.results} />
+                        {data.results?.length > 0 && <div style={{ marginTop: 16 }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span className="badge badge-green">📋 Data</span><span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span></div><ResultsTable data={data.results} /></div>}
+                      </div>
+                    )}
+                    {activeTab === 'trends' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Column trends across the dataset</p><TrendChart trends={data.trends} /></div>}
+                    {activeTab === 'correlations' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Relationships between numeric columns</p><CorrelationHeatmap correlations={data.correlations} />{(!data.correlations || data.correlations.length === 0) && <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No strong correlations found</p>}</div>}
+                    {activeTab === 'clusters' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Natural groupings in your data</p><ClusterViz clusters={data.clusters} />{(!data.clusters || data.clusters.length === 0) && <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>Need at least 2 numeric columns for clustering</p>}</div>}
                   </div>
                 )}
 
