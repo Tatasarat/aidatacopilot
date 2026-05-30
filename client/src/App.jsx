@@ -54,6 +54,7 @@ const STYLES = `
   ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
   .pulse-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.8)} }
+  @keyframes micPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(1.15)} }
   .auth-input { width: 100%; background: #0a0e1a; border: 1px solid #1e293b; border-radius: 8px; padding: 12px 16px; color: #e2e8f0; font-size: 14px; font-family: 'DM Sans', sans-serif; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
   .auth-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
   .auth-input::placeholder { color: #374151; }
@@ -88,10 +89,12 @@ const STYLES = `
   .plan-card { background: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 24px; cursor: pointer; transition: all 0.2s; }
   .plan-card:hover { border-color: #3b82f6; transform: translateY(-2px); }
   .plan-card.current { border-color: #3b82f6; background: rgba(59,130,246,0.05); }
-  .heatmap-cell { display: inline-block; border-radius: 2px; font-size: 9px; color: white; text-align: center; line-height: 1; }
+  .mic-btn { background: #1e293b; border: none; border-radius: 8px; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; cursor: pointer; margin-right: 6px; font-size: 16px; flex-shrink: 0; transition: all 0.2s; }
+  .mic-btn.listening { background: linear-gradient(135deg, #ef4444, #dc2626); animation: micPulse 1s ease-in-out infinite; }
+  .mic-btn:hover { background: #2d3748; }
 `;
 
-// ─── Credits Bar Component ────────────────────────────────
+// ─── Credits Bar ──────────────────────────────────────────
 function CreditsBar({ credits, onUpgrade }) {
   if (!credits) return null;
   const isUnlimited = credits.plan === 'enterprise';
@@ -104,9 +107,7 @@ function CreditsBar({ credits, onUpgrade }) {
       <div style={{ textAlign: 'right' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 11, color: planColors[credits.plan], fontWeight: 700, textTransform: 'uppercase' }}>{credits.plan}</span>
-          {credits.plan !== 'enterprise' && (
-            <span style={{ fontSize: 11, color: '#4b5563' }}>{credits.credits_used}/{credits.credits_limit} queries</span>
-          )}
+          {credits.plan !== 'enterprise' && <span style={{ fontSize: 11, color: '#4b5563' }}>{credits.credits_used}/{credits.credits_limit} queries</span>}
           {credits.plan === 'enterprise' && <span style={{ fontSize: 11, color: '#4b5563' }}>unlimited</span>}
         </div>
         {!isUnlimited && (
@@ -133,71 +134,52 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
 
   useEffect(() => {
     fetchPaymentHistory();
-    // Load Razorpay script
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
     document.body.appendChild(script);
-    return () => document.body.removeChild(script);
+    return () => { if (document.body.contains(script)) document.body.removeChild(script); };
   }, []);
 
   const fetchPaymentHistory = async () => {
     try {
       const res = await axios.get(`${API_URL}/api/payment-history/${user.email}`);
       setPaymentHistory(res.data.payments || []);
-    } catch (err) { console.error('Payment history error:', err); }
+    } catch (err) { console.error(err); }
   };
 
   const handlePayment = async (plan) => {
-    setLoading(plan);
-    setMsg({ type: '', text: '' });
+    setLoading(plan); setMsg({ type: '', text: '' });
     try {
-      // Create order
-      const orderRes = await axios.post(`${API_URL}/api/create-order`, {
-        plan, email: user.email
-      });
-
+      const orderRes = await axios.post(`${API_URL}/api/create-order`, { plan, email: user.email });
       const { order_id, amount, currency, name, key_id } = orderRes.data;
 
-      // Open Razorpay
       const options = {
         key: key_id,
-        amount,
-        currency,
+        amount, currency,
         name: 'InsightAI',
         description: name,
         order_id,
-        prefill: {
-          name: user.name,
-          email: user.email,
-        },
+        prefill: { name: user.name, email: user.email },
         theme: { color: '#3b82f6' },
         handler: async (response) => {
           try {
-            // Verify payment
             const verifyRes = await axios.post(`${API_URL}/api/verify-payment`, {
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
-              email: user.email,
-              plan
+              email: user.email, plan
             });
-
             if (verifyRes.data.success) {
-              setMsg({ type: 'success', text: `🎉 Successfully upgraded to ${plan}! Your credits have been updated.` });
+              setMsg({ type: 'success', text: `🎉 Successfully upgraded to ${plan}!` });
               fetchPaymentHistory();
               onUpgrade(plan);
             }
           } catch (err) {
-            setMsg({ type: 'error', text: 'Payment verification failed. Please contact support.' });
+            setMsg({ type: 'error', text: 'Payment verification failed.' });
           }
         },
-        modal: {
-          ondismiss: () => {
-            setLoading('');
-            setMsg({ type: 'error', text: 'Payment cancelled.' });
-          }
-        }
+        modal: { ondismiss: () => { setLoading(''); setMsg({ type: 'error', text: 'Payment cancelled.' }); } }
       };
 
       const rzp = new window.Razorpay(options);
@@ -233,7 +215,6 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
           )}
         </div>
 
-        {/* Current plan banner */}
         {credits && (
           <div className="card" style={{ marginBottom: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, borderColor: planColors[credits.plan] }}>
             <div>
@@ -241,34 +222,22 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
               <p style={{ fontSize: 20, fontWeight: 700, color: planColors[credits.plan], textTransform: 'capitalize' }}>{credits.plan}</p>
             </div>
             <div style={{ display: 'flex', gap: 24 }}>
-              <div style={{ textAlign: 'center' }}>
-                <p style={{ fontSize: 22, fontWeight: 700, color: '#3b82f6' }}>{credits.credits_used}</p>
-                <p style={{ fontSize: 11, color: '#4b5563' }}>Used</p>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <p style={{ fontSize: 22, fontWeight: 700, color: '#34d399' }}>{credits.credits_remaining === 'unlimited' ? '∞' : credits.credits_remaining}</p>
-                <p style={{ fontSize: 11, color: '#4b5563' }}>Remaining</p>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <p style={{ fontSize: 22, fontWeight: 700, color: '#94a3b8' }}>{credits.credits_limit === 999999 ? '∞' : credits.credits_limit}</p>
-                <p style={{ fontSize: 11, color: '#4b5563' }}>Total/month</p>
-              </div>
+              {[{ label: 'Used', value: credits.credits_used }, { label: 'Remaining', value: credits.credits_remaining === 'unlimited' ? '∞' : credits.credits_remaining }, { label: 'Total/month', value: credits.credits_limit === 999999 ? '∞' : credits.credits_limit }].map(s => (
+                <div key={s.label} style={{ textAlign: 'center' }}>
+                  <p style={{ fontSize: 22, fontWeight: 700, color: '#3b82f6' }}>{s.value}</p>
+                  <p style={{ fontSize: 11, color: '#4b5563' }}>{s.label}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* Plan cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginBottom: 40 }}>
           {Object.entries(PLANS).map(([key, plan]) => (
-            <div key={key} className={`plan-card ${credits?.plan === key ? 'current' : ''}`}
-              style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b', position: 'relative' }}>
-              {key === 'pro' && (
-                <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 20, padding: '3px 14px', fontSize: 11, fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>MOST POPULAR</div>
-              )}
+            <div key={key} className={`plan-card ${credits?.plan === key ? 'current' : ''}`} style={{ borderColor: credits?.plan === key ? plan.color : '#1e293b', position: 'relative' }}>
+              {key === 'pro' && <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', borderRadius: 20, padding: '3px 14px', fontSize: 11, fontWeight: 700, color: 'white', whiteSpace: 'nowrap' }}>MOST POPULAR</div>}
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4, color: plan.color }}>{plan.name}</h2>
-              <p style={{ fontSize: 32, fontWeight: 700, marginBottom: 2 }}>
-                {key === 'free' ? '₹0' : key === 'pro' ? '₹999' : '₹4,999'}
-              </p>
+              <p style={{ fontSize: 32, fontWeight: 700, marginBottom: 2 }}>{key === 'free' ? '₹0' : key === 'pro' ? '₹999' : '₹4,999'}</p>
               <p style={{ color: '#4b5563', fontSize: 13, marginBottom: 20 }}>/month · {plan.queries} queries</p>
               <div style={{ marginBottom: 24 }}>
                 {plan.features.map(f => (
@@ -283,36 +252,26 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
               ) : key === 'free' ? (
                 <div style={{ background: '#1e293b', borderRadius: 8, padding: '10px', textAlign: 'center', color: '#64748b', fontSize: 13 }}>Free Forever</div>
               ) : (
-                <button
-                  onClick={() => handlePayment(key)}
-                  disabled={loading === key}
+                <button onClick={() => handlePayment(key)} disabled={loading === key}
                   style={{ width: '100%', background: `linear-gradient(135deg, ${plan.color}, ${plan.color}cc)`, border: 'none', borderRadius: 8, color: 'white', fontSize: 14, fontWeight: 600, padding: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                  {loading === key ? (
-                    <><span className="spinner" style={{ width: 16, height: 16 }}></span>Processing...</>
-                  ) : (
-                    <>🔒 Pay {key === 'pro' ? '₹999' : '₹4,999'}/mo</>
-                  )}
+                  {loading === key ? <><span className="spinner" style={{ width: 16, height: 16 }}></span>Processing...</> : <>🔒 Pay {key === 'pro' ? '₹999' : '₹4,999'}/mo</>}
                 </button>
               )}
             </div>
           ))}
         </div>
 
-        {/* Security badges */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 40, flexWrap: 'wrap' }}>
           {['🔒 256-bit SSL Encryption', '🏦 Razorpay Secured', '↩ Cancel Anytime', '📱 UPI, Cards, NetBanking'].map(b => (
-            <div key={b} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#4b5563' }}>{b}</div>
+            <div key={b} style={{ fontSize: 13, color: '#4b5563' }}>{b}</div>
           ))}
         </div>
 
-        {/* Payment History */}
         {paymentHistory.length > 0 && (
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment History</p>
-              <button onClick={() => setShowHistory(!showHistory)} style={{ background: 'transparent', border: 'none', color: '#3b82f6', fontSize: 13, cursor: 'pointer' }}>
-                {showHistory ? 'Hide' : 'Show'} ({paymentHistory.length})
-              </button>
+              <button onClick={() => setShowHistory(!showHistory)} style={{ background: 'transparent', border: 'none', color: '#3b82f6', fontSize: 13, cursor: 'pointer' }}>{showHistory ? 'Hide' : 'Show'} ({paymentHistory.length})</button>
             </div>
             {showHistory && paymentHistory.map((p, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid #0d1117' }}>
@@ -334,10 +293,10 @@ function UpgradePage({ user, credits, onBack, onUpgrade, API_URL }) {
     </div>
   );
 }
+
 // ─── Correlation Heatmap ──────────────────────────────────
 function CorrelationHeatmap({ correlations }) {
   if (!correlations || !correlations.length) return null;
-
   const getColor = (val) => {
     const abs = Math.abs(val);
     if (abs > 0.8) return val > 0 ? '#1d4ed8' : '#dc2626';
@@ -345,7 +304,6 @@ function CorrelationHeatmap({ correlations }) {
     if (abs > 0.4) return val > 0 ? '#93c5fd' : '#fca5a5';
     return '#1e293b';
   };
-
   return (
     <div>
       <p style={{ fontSize: 12, color: '#4b5563', marginBottom: 12 }}>Strong correlations found:</p>
@@ -370,7 +328,6 @@ function CorrelationHeatmap({ correlations }) {
 // ─── Trend Chart ──────────────────────────────────────────
 function TrendChart({ trends }) {
   if (!trends || !trends.length) return null;
-
   return (
     <div>
       {trends.slice(0, 4).map((t, i) => (
@@ -397,13 +354,10 @@ function TrendChart({ trends }) {
 function ClusterViz({ clusters }) {
   if (!clusters || !clusters.length) return null;
   const colors = ['#3b82f6', '#8b5cf6', '#34d399', '#fbbf24', '#f87171'];
-
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {clusters.map((c, i) => (
-          <div key={i} style={{ flex: c.size, background: colors[i % colors.length], borderRadius: 4, height: 8, opacity: 0.8 }}></div>
-        ))}
+        {clusters.map((c, i) => <div key={i} style={{ flex: c.size, background: colors[i % colors.length], borderRadius: 4, height: 8, opacity: 0.8 }}></div>)}
       </div>
       {clusters.map((c, i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, background: '#0d1117', borderRadius: 8, padding: '10px 14px' }}>
@@ -425,43 +379,11 @@ function ClusterViz({ clusters }) {
 
 // ─── PDF Export ───────────────────────────────────────────
 function exportToPDF(data, question) {
-  const content = `
-    InsightAI Analysis Report
-    ========================
-    Question: ${question}
-    Date: ${new Date().toLocaleDateString()}
-
-    SUMMARY
-    -------
-    ${data.explanation}
-
-    ANOMALIES
-    ---------
-    ${data.anomalies}
-
-    SQL GENERATED
-    -------------
-    ${data.sql}
-
-    RESULTS (first 20 rows)
-    -----------------------
-    ${data.results ? JSON.stringify(data.results.slice(0, 20), null, 2) : 'No results'}
-
-    TRENDS
-    ------
-    ${data.trends ? data.trends.map(t => `${t.column}: ${t.direction} (${t.change_pct}% change)`).join('\n') : 'No trends'}
-
-    CORRELATIONS
-    ------------
-    ${data.correlations ? data.correlations.map(c => `${c.col1} ↔ ${c.col2}: ${c.correlation}`).join('\n') : 'No correlations'}
-  `;
-
+  const content = `InsightAI Analysis Report\n========================\nQuestion: ${question}\nDate: ${new Date().toLocaleDateString()}\n\nSUMMARY\n-------\n${data.explanation}\n\nANOMALIES\n---------\n${data.anomalies}\n\nSQL GENERATED\n-------------\n${data.sql}\n\nRESULTS (first 20 rows)\n-----------------------\n${data.results ? JSON.stringify(data.results.slice(0, 20), null, 2) : 'No results'}\n\nTRENDS\n------\n${data.trends ? data.trends.map(t => `${t.column}: ${t.direction} (${t.change_pct}% change)`).join('\n') : 'No trends'}\n\nCORRELATIONS\n------------\n${data.correlations ? data.correlations.map(c => `${c.col1} ↔ ${c.col2}: ${c.correlation}`).join('\n') : 'No correlations'}`;
   const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `insightai-report-${Date.now()}.txt`;
-  a.click();
+  a.href = url; a.download = `insightai-report-${Date.now()}.txt`; a.click();
   URL.revokeObjectURL(url);
 }
 
@@ -989,7 +911,9 @@ export default function App() {
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
   const [activeTab, setActiveTab] = useState('results');
+  const [listening, setListening] = useState(false);
   const fileRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   const fetchCredits = async (email) => {
     try {
@@ -998,27 +922,51 @@ export default function App() {
     } catch (err) { console.error('Credits error:', err); }
   };
 
-  const handleLogin = (u) => {
-    setUser(u);
-    setScreen('upload');
-    fetchCredits(u.email);
-  };
+  const handleLogin = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
+  const handleSignup = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
+  const handleLogout = () => { setUser(null); setScreen('login'); setData(null); setHistory([]); setCsvInfo(null); setTableName(null); setCredits(null); setCsvFiles([]); };
+  const handleUpgrade = (plan) => { fetchCredits(user.email); setScreen(csvInfo ? 'chat' : 'upload'); };
 
-  const handleSignup = (u) => {
-    setUser(u);
-    setScreen('upload');
-    fetchCredits(u.email);
-  };
+  // ── Voice to Text ────────────────────────────────────────
+  const toggleListening = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      alert('Voice input not supported. Please use Chrome or Edge.');
+      return;
+    }
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
 
-  const handleLogout = () => {
-    setUser(null); setScreen('login'); setData(null);
-    setHistory([]); setCsvInfo(null); setTableName(null);
-    setCredits(null); setCsvFiles([]);
-  };
+    recognition.onstart = () => setListening(true);
 
-  const handleUpgrade = (plan) => {
-    fetchCredits(user.email);
-    setScreen(csvInfo ? 'chat' : 'upload');
+    recognition.onresult = (event) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setQuestion(transcript);
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      setListening(false);
+      if (event.error === 'not-allowed') {
+        alert('Microphone access denied. Please allow microphone in browser settings.');
+      }
+    };
+
+    recognition.start();
   };
 
   const handleFile = async (file) => {
@@ -1042,16 +990,8 @@ export default function App() {
     if (!query.trim()) return;
     setLoading(true); setError(null); setData(null); setActiveTab('results');
     try {
-      const res = await axios.post(`${API_URL}/api/query`, {
-        question: query, tableName, email: user?.email
-      });
-
-      if (res.data.upgrade_required) {
-        setError('Credit limit reached! Please upgrade your plan.');
-        setScreen('upgrade');
-        return;
-      }
-
+      const res = await axios.post(`${API_URL}/api/query`, { question: query, tableName, email: user?.email });
+      if (res.data.upgrade_required) { setError('Credit limit reached! Please upgrade.'); setScreen('upgrade'); return; }
       setData(res.data);
       setHistory(h => [{ question: query, time: new Date().toLocaleTimeString() }, ...h.slice(0, 4)]);
       if (user?.email) {
@@ -1063,12 +1003,8 @@ export default function App() {
         fetchCredits(user.email);
       }
     } catch (err) {
-      if (err.response?.data?.upgrade_required) {
-        setError('Credit limit reached! Please upgrade your plan.');
-        setScreen('upgrade');
-      } else {
-        setError(err.response?.data?.error || 'Something went wrong');
-      }
+      if (err.response?.data?.upgrade_required) { setError('Credit limit reached!'); setScreen('upgrade'); }
+      else { setError(err.response?.data?.error || 'Something went wrong'); }
     } finally { setLoading(false); }
   };
 
@@ -1119,7 +1055,6 @@ export default function App() {
 
             {uploadError && <div style={{ marginTop: 16, background: '#1a0505', border: '1px solid #450a0a', borderRadius: 8, padding: '12px 16px', color: '#f87171', fontSize: 14 }}>⚠️ {uploadError}</div>}
 
-            {/* Recent CSV files */}
             {csvFiles.length > 0 && (
               <div style={{ marginTop: 24 }}>
                 <p style={{ fontSize: 13, color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>Recent Files</p>
@@ -1136,8 +1071,8 @@ export default function App() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 40 }}>
               {[
-                { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
-                { icon: '🔍', title: 'Anomaly Detection', desc: 'AI spots outliers automatically' },
+                { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English or by voice' },
+                { icon: '🎤', title: 'Voice Input', desc: 'Speak your question, AI understands' },
                 { icon: '📊', title: 'Advanced Charts', desc: 'Trends, correlations, clusters' }
               ].map(f => (
                 <div key={f.title} className="card" style={{ textAlign: 'center' }}>
@@ -1153,7 +1088,6 @@ export default function App() {
         {/* CHAT SCREEN */}
         {screen === 'chat' && (
           <div className="fade-in">
-            {/* CSV info + multiple file switcher */}
             <div className="card" style={{ marginBottom: 24 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1177,24 +1111,41 @@ export default function App() {
             </div>
 
             {/* Credit warning */}
-            {credits && credits.plan !== 'enterprise' && (
-              credits.credits_remaining <= 2 ? (
-                <div style={{ background: '#1a0a05', border: '1px solid #92400e', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#fbbf24', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>⚠️ Only {credits.credits_remaining} queries remaining this month!</span>
-                  <button onClick={() => setScreen('upgrade')} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '4px 12px', cursor: 'pointer' }}>Upgrade Now</button>
-                </div>
-              ) : null
+            {credits && credits.plan !== 'enterprise' && credits.credits_remaining <= 2 && (
+              <div style={{ background: '#1a0a05', border: '1px solid #92400e', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#fbbf24', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>⚠️ Only {credits.credits_remaining} queries remaining!</span>
+                <button onClick={() => setScreen('upgrade')} style={{ background: 'linear-gradient(135deg, #3b82f6, #6366f1)', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '4px 12px', cursor: 'pointer' }}>Upgrade Now</button>
+              </div>
             )}
 
-            {/* Input */}
+            {/* Voice + Text Input */}
             <div style={{ marginBottom: 12 }}>
               <div className="input-wrap">
                 <span style={{ fontSize: 16, marginRight: 8 }}>💬</span>
-                <input className="main-input" value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleQuery()} placeholder='Ask anything about your data...' />
+                <input
+                  className="main-input"
+                  value={question}
+                  onChange={e => setQuestion(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleQuery()}
+                  placeholder={listening ? '🎤 Listening... speak now' : 'Ask anything or click 🎤 to speak...'}
+                />
+                <button
+                  className={`mic-btn ${listening ? 'listening' : ''}`}
+                  onClick={toggleListening}
+                  title={listening ? 'Stop listening' : 'Voice input'}>
+                  {listening ? '⏹' : '🎤'}
+                </button>
                 <button className="ask-btn" disabled={loading || !question.trim()} onClick={() => handleQuery()}>
                   {loading ? <><span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }}></span>Thinking</> : 'Ask AI →'}
                 </button>
               </div>
+              {listening && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, padding: '6px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8 }}>
+                  <div style={{ width: 8, height: 8, background: '#ef4444', borderRadius: '50%', animation: 'micPulse 1s ease-in-out infinite' }}></div>
+                  <span style={{ fontSize: 12, color: '#f87171' }}>Listening... speak your question clearly</span>
+                  <span style={{ fontSize: 12, color: '#374151', marginLeft: 'auto' }}>Click ⏹ to stop</span>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 28 }}>
@@ -1205,7 +1156,7 @@ export default function App() {
               <div className="card fade-in" style={{ textAlign: 'center', padding: '40px 24px' }}>
                 <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3, margin: '0 auto 16px' }}></div>
                 <p style={{ color: '#94a3b8', fontSize: 15, marginBottom: 4 }}>Analyzing your data...</p>
-                <p style={{ color: '#4b5563', fontSize: 13 }}>Generating SQL → Running query → AI analysis → Results</p>
+                <p style={{ color: '#4b5563', fontSize: 13 }}>Generating SQL → Running query → Detecting anomalies → Explaining results</p>
               </div>
             )}
 
@@ -1218,20 +1169,14 @@ export default function App() {
 
             {data && !loading && (
               <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-                {/* Summary */}
                 <div className="card" style={{ borderColor: 'rgba(59,130,246,0.3)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <span className="badge badge-blue">📊 Summary</span>
-                    <button onClick={() => exportToPDF(data, question)}
-                      style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '4px 12px', cursor: 'pointer' }}>
-                      📄 Export PDF
-                    </button>
+                    <button onClick={() => exportToPDF(data, question)} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '4px 12px', cursor: 'pointer' }}>📄 Export</button>
                   </div>
                   <p style={{ color: '#cbd5e1', lineHeight: 1.7, fontSize: 15 }}>{data.explanation}</p>
                 </div>
 
-                {/* Anomalies */}
                 {data.anomalies && (
                   <div className="card" style={{ borderColor: 'rgba(245,158,11,0.3)' }}>
                     <div style={{ marginBottom: 12 }}><span className="badge badge-amber">⚠️ Anomalies</span></div>
@@ -1239,7 +1184,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Advanced Analysis Tabs */}
                 {(data.trends?.length > 0 || data.correlations?.length > 0 || data.clusters?.length > 0) && (
                   <div className="card">
                     <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: '#0d1117', borderRadius: 8, padding: 4 }}>
@@ -1247,52 +1191,13 @@ export default function App() {
                         <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)} style={{ flex: 1, fontSize: 12 }}>{label}</button>
                       ))}
                     </div>
-
-                    {activeTab === 'results' && (
-                      <div>
-                        <ChartView data={data.results} />
-                        {data.results?.length > 0 && (
-                          <div style={{ marginTop: 16 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                              <span className="badge badge-green">📋 Data</span>
-                              <span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span>
-                            </div>
-                            <ResultsTable data={data.results} />
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {activeTab === 'trends' && (
-                      <div>
-                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Column trends over the dataset</p>
-                        <TrendChart trends={data.trends} />
-                      </div>
-                    )}
-
-                    {activeTab === 'correlations' && (
-                      <div>
-                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Relationships between numeric columns</p>
-                        <CorrelationHeatmap correlations={data.correlations} />
-                        {(!data.correlations || data.correlations.length === 0) && (
-                          <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No strong correlations found in this query result</p>
-                        )}
-                      </div>
-                    )}
-
-                    {activeTab === 'clusters' && (
-                      <div>
-                        <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Natural groupings in your data</p>
-                        <ClusterViz clusters={data.clusters} />
-                        {(!data.clusters || data.clusters.length === 0) && (
-                          <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>Need at least 2 numeric columns for clustering</p>
-                        )}
-                      </div>
-                    )}
+                    {activeTab === 'results' && <div><ChartView data={data.results} />{data.results?.length > 0 && <div style={{ marginTop: 16 }}><ResultsTable data={data.results} /></div>}</div>}
+                    {activeTab === 'trends' && <TrendChart trends={data.trends} />}
+                    {activeTab === 'correlations' && <CorrelationHeatmap correlations={data.correlations} />}
+                    {activeTab === 'clusters' && <ClusterViz clusters={data.clusters} />}
                   </div>
                 )}
 
-                {/* SQL */}
                 <details className="card">
                   <summary style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span className="badge badge-green">🔍 Generated SQL</span>
@@ -1301,7 +1206,6 @@ export default function App() {
                   <div style={{ marginTop: 14 }}><pre className="sql-block">{data.sql}</pre></div>
                 </details>
 
-                {/* Simple results if no advanced tabs */}
                 {!(data.trends?.length > 0 || data.correlations?.length > 0 || data.clusters?.length > 0) && data.results?.length > 0 && (
                   <>
                     <div className="card"><div style={{ marginBottom: 14 }}><span className="badge badge-blue">📈 Chart</span></div><ChartView data={data.results} /></div>
