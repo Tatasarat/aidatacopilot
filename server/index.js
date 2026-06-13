@@ -6,6 +6,7 @@ const queryRoute = require('./src/routes/query');
 const uploadRoute = require('./src/routes/upload');
 const authRoute = require('./src/routes/auth');
 const paymentRoute = require('./src/routes/payment');
+const marketplaceRoute = require('./src/routes/marketplace');
 
 const app = express();
 
@@ -24,8 +25,9 @@ app.use('/api', authRoute);
 app.use('/api', uploadRoute);
 app.use('/api', queryRoute);
 app.use('/api', paymentRoute);
+app.use('/api', marketplaceRoute);
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-});// Wed May 20 09:28:05 IST 2026
+});

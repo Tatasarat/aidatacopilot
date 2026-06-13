@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import ResultsTable from './components/ResultsTable.jsx';
 import ChartView from './components/ChartView.jsx';
+import MarketplacePage from './components/MarketplacePage.jsx';
 
 const suggestions = [
   'Show total billing by medical condition',
@@ -385,7 +386,7 @@ function exportToPDF(data, question) {
 }
 
 // ─── Topbar ───────────────────────────────────────────────
-function Topbar({ user, onLogout, showStatus, rowCount, onProfile, onUpgrade, credits }) {
+function Topbar({ user, onLogout, showStatus, rowCount, onProfile, onUpgrade, onMarketplace, credits }) {
   return (
     <>
       <div style={{ borderBottom: '1px solid #1e293b', padding: '0 32px' }}>
@@ -395,17 +396,22 @@ function Topbar({ user, onLogout, showStatus, rowCount, onProfile, onUpgrade, cr
             <span style={{ fontWeight: 600, fontSize: 15 }}>InsightAI</span>
             <span style={{ background: '#1e293b', color: '#64748b', fontSize: 10, padding: '2px 8px', borderRadius: 4 }}>AI</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {showStatus && <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><div className="pulse-dot"></div><span style={{ fontSize: 12, color: '#4b5563' }}>{rowCount} rows loaded</span></div>}
             {user && <CreditsBar credits={credits} onUpgrade={onUpgrade} />}
             {user && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div onClick={onProfile} title="View Profile" style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}>
-                  {user.name?.charAt(0).toUpperCase()}
+              <>
+                <button onClick={onMarketplace} style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 8, color: '#a78bfa', fontSize: 12, fontWeight: 600, padding: '5px 12px', cursor: 'pointer' }}>
+                  🛒 Marketplace
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div onClick={onProfile} title="View Profile" style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: 'white', cursor: 'pointer' }}>
+                    {user.name?.charAt(0).toUpperCase()}
+                  </div>
+                  <span style={{ fontSize: 13, color: '#64748b' }}>{user.name}</span>
+                  <button onClick={onLogout} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '5px 12px', cursor: 'pointer' }}>Logout</button>
                 </div>
-                <span style={{ fontSize: 13, color: '#64748b' }}>{user.name}</span>
-                <button onClick={onLogout} style={{ background: '#1e293b', border: '1px solid #2d3748', borderRadius: 6, color: '#94a3b8', fontSize: 12, padding: '5px 12px', cursor: 'pointer' }}>Logout</button>
-              </div>
+              </>
             )}
           </div>
         </div>
@@ -719,7 +725,6 @@ function ProfilePage({ user, credits, onBack, onLogout, onUpgrade, API_URL }) {
       });
       setMsg({ type: 'success', text: 'Profile updated successfully!' });
     } catch (err) {
-      console.error('Profile update error:', err.response?.data);
       setMsg({ type: 'error', text: err.response?.data?.error || 'Failed to update profile' });
     } finally { setSaving(false); }
   };
@@ -932,7 +937,11 @@ export default function App() {
 
   const handleLogin = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
   const handleSignup = (u) => { setUser(u); setScreen('upload'); fetchCredits(u.email); };
-  const handleLogout = () => { setUser(null); setScreen('login'); setData(null); setHistory([]); setCsvInfo(null); setTableName(null); setCredits(null); setCsvFiles([]); if (listening) { recognitionRef.current?.stop(); setListening(false); } };
+  const handleLogout = () => {
+    setUser(null); setScreen('login'); setData(null); setHistory([]);
+    setCsvInfo(null); setTableName(null); setCredits(null); setCsvFiles([]);
+    if (listening) { recognitionRef.current?.stop(); setListening(false); }
+  };
   const handleUpgrade = () => { fetchCredits(user.email); setScreen(csvInfo ? 'chat' : 'upload'); };
 
   // ── Voice to Text ─────────────────────────────────────────
@@ -941,12 +950,7 @@ export default function App() {
       alert('Voice input not supported. Please use Chrome or Edge.');
       return;
     }
-
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      return;
-    }
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
@@ -956,20 +960,14 @@ export default function App() {
     recognition.lang = 'en-US';
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => {
-      setListening(true);
-      setQuestion('');
-    };
+    recognition.onstart = () => { setListening(true); setQuestion(''); };
 
     recognition.onresult = (event) => {
       let finalTranscript = '';
       let interimTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
+        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+        else interimTranscript += event.results[i][0].transcript;
       }
       setQuestion(finalTranscript || interimTranscript);
     };
@@ -977,18 +975,13 @@ export default function App() {
     recognition.onend = () => {
       setListening(false);
       const currentQ = questionRef.current;
-      if (currentQ.trim()) {
-        setTimeout(() => handleQuery(currentQ), 300);
-      }
+      if (currentQ.trim()) setTimeout(() => handleQuery(currentQ), 300);
     };
 
     recognition.onerror = (event) => {
       setListening(false);
-      if (event.error === 'not-allowed') {
-        alert('Microphone access denied. Please allow microphone in browser settings.');
-      } else if (event.error === 'no-speech') {
-        alert('No speech detected. Please try again.');
-      }
+      if (event.error === 'not-allowed') alert('Microphone access denied. Please allow microphone in browser settings.');
+      else if (event.error === 'no-speech') alert('No speech detected. Please try again.');
     };
 
     recognition.start();
@@ -1033,17 +1026,24 @@ export default function App() {
     } finally { setLoading(false); }
   };
 
+  // ── Screen routing ────────────────────────────────────────
   if (screen === 'login') return <><style>{STYLES}</style><LoginPage onLogin={handleLogin} onGoSignup={() => setScreen('signup')} onGoForgot={() => setScreen('forgot')} API_URL={API_URL} /></>;
   if (screen === 'signup') return <><style>{STYLES}</style><SignupPage onSignup={handleSignup} onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
   if (screen === 'forgot') return <><style>{STYLES}</style><ForgotPasswordPage onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
   if (screen === 'reset') return <><style>{STYLES}</style><ResetPasswordPage token={resetToken} onGoLogin={() => setScreen('login')} API_URL={API_URL} /></>;
   if (screen === 'profile') return <><style>{STYLES}</style><ProfilePage user={user} credits={credits} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} onLogout={handleLogout} onUpgrade={() => setScreen('upgrade')} API_URL={API_URL} /></>;
   if (screen === 'upgrade') return <><style>{STYLES}</style><UpgradePage user={user} credits={credits} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} onUpgrade={handleUpgrade} API_URL={API_URL} /></>;
+  if (screen === 'marketplace') return (
+    <>
+      <style>{STYLES}</style>
+      <MarketplacePage user={user} credits={credits} onBack={() => setScreen(csvInfo ? 'chat' : 'upload')} API_URL={API_URL} onCreditsUpdate={fetchCredits} />
+    </>
+  );
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0e1a', color: '#e2e8f0', fontFamily: "'DM Sans', 'Segoe UI', sans-serif" }}>
       <style>{STYLES}</style>
-      <Topbar user={user} onLogout={handleLogout} showStatus={screen === 'chat'} rowCount={csvInfo?.rowCount} onProfile={() => setScreen('profile')} onUpgrade={() => setScreen('upgrade')} credits={credits} />
+      <Topbar user={user} onLogout={handleLogout} showStatus={screen === 'chat'} rowCount={csvInfo?.rowCount} onProfile={() => setScreen('profile')} onUpgrade={() => setScreen('upgrade')} onMarketplace={() => setScreen('marketplace')} credits={credits} />
 
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '40px 24px' }}>
 
@@ -1098,9 +1098,9 @@ export default function App() {
               {[
                 { icon: '🧠', title: 'Natural Language', desc: 'Ask in plain English, no SQL needed' },
                 { icon: '🎤', title: 'Voice Input', desc: 'Speak your question, AI understands' },
-                { icon: '📊', title: 'Advanced Charts', desc: 'Trends, correlations, clusters' }
+                { icon: '🛒', title: 'Marketplace', desc: 'Download datasets & research papers' }
               ].map(f => (
-                <div key={f.title} className="card" style={{ textAlign: 'center' }}>
+                <div key={f.title} className="card" style={{ textAlign: 'center', cursor: f.title === 'Marketplace' ? 'pointer' : 'default' }} onClick={f.title === 'Marketplace' ? () => setScreen('marketplace') : undefined}>
                   <div style={{ fontSize: 28, marginBottom: 10 }}>{f.icon}</div>
                   <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{f.title}</p>
                   <p style={{ color: '#4b5563', fontSize: 13, lineHeight: 1.5 }}>{f.desc}</p>
@@ -1135,7 +1135,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Credit warning */}
             {credits && credits.plan !== 'enterprise' && credits.credits_remaining <= 2 && (
               <div style={{ background: '#1a0a05', border: '1px solid #92400e', borderRadius: 8, padding: '10px 16px', fontSize: 13, color: '#fbbf24', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>⚠️ Only {credits.credits_remaining} queries remaining this month!</span>
@@ -1147,17 +1146,8 @@ export default function App() {
             <div style={{ marginBottom: 12 }}>
               <div className="input-wrap">
                 <span style={{ fontSize: 16, marginRight: 8 }}>💬</span>
-                <input
-                  className="main-input"
-                  value={question}
-                  onChange={e => setQuestion(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !listening && handleQuery()}
-                  placeholder={listening ? '🎤 Listening... speak now' : 'Ask anything or click 🎤 to speak...'}
-                />
-                <button
-                  className={`mic-btn ${listening ? 'listening' : ''}`}
-                  onClick={toggleListening}
-                  title={listening ? 'Stop listening' : 'Start voice input'}>
+                <input className="main-input" value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => e.key === 'Enter' && !listening && handleQuery()} placeholder={listening ? '🎤 Listening... speak now' : 'Ask anything or click 🎤 to speak...'} />
+                <button className={`mic-btn ${listening ? 'listening' : ''}`} onClick={toggleListening} title={listening ? 'Stop listening' : 'Start voice input'}>
                   {listening ? '⏹' : '🎤'}
                 </button>
                 <button className="ask-btn" disabled={loading || !question.trim()} onClick={() => handleQuery()}>
@@ -1165,25 +1155,16 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Listening indicator */}
               {listening && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, padding: '10px 16px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 10 }}>
                   <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 24 }}>
                     {[0.4, 0.7, 1, 0.7, 0.4, 0.8, 0.5].map((h, i) => (
-                      <div key={i} style={{
-                        width: 3,
-                        background: '#ef4444',
-                        borderRadius: 2,
-                        height: `${h * 20}px`,
-                        animation: `soundBar ${0.4 + i * 0.1}s ease-in-out infinite alternate`
-                      }} />
+                      <div key={i} style={{ width: 3, background: '#ef4444', borderRadius: 2, height: `${h * 20}px`, animation: `soundBar ${0.4 + i * 0.1}s ease-in-out infinite alternate` }} />
                     ))}
                   </div>
                   <span style={{ fontSize: 13, color: '#f87171', fontWeight: 500 }}>🎤 Listening...</span>
                   {question && <span style={{ fontSize: 12, color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>"{question}"</span>}
-                  <button onClick={toggleListening} style={{ background: '#ef4444', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '5px 12px', cursor: 'pointer', flexShrink: 0 }}>
-                    ⏹ Stop & Submit
-                  </button>
+                  <button onClick={toggleListening} style={{ background: '#ef4444', border: 'none', borderRadius: 6, color: 'white', fontSize: 12, fontWeight: 600, padding: '5px 12px', cursor: 'pointer', flexShrink: 0 }}>⏹ Stop & Submit</button>
                 </div>
               )}
             </div>
@@ -1231,12 +1212,7 @@ export default function App() {
                         <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)} style={{ flex: 1, fontSize: 12 }}>{label}</button>
                       ))}
                     </div>
-                    {activeTab === 'results' && (
-                      <div>
-                        <ChartView data={data.results} />
-                        {data.results?.length > 0 && <div style={{ marginTop: 16 }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span className="badge badge-green">📋 Data</span><span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span></div><ResultsTable data={data.results} /></div>}
-                      </div>
-                    )}
+                    {activeTab === 'results' && <div><ChartView data={data.results} />{data.results?.length > 0 && <div style={{ marginTop: 16 }}><div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span className="badge badge-green">📋 Data</span><span style={{ color: '#4b5563', fontSize: 12 }}>{data.results.length} rows</span></div><ResultsTable data={data.results} /></div>}</div>}
                     {activeTab === 'trends' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Column trends across the dataset</p><TrendChart trends={data.trends} /></div>}
                     {activeTab === 'correlations' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Relationships between numeric columns</p><CorrelationHeatmap correlations={data.correlations} />{(!data.correlations || data.correlations.length === 0) && <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>No strong correlations found</p>}</div>}
                     {activeTab === 'clusters' && <div><p style={{ fontSize: 13, color: '#4b5563', marginBottom: 16 }}>Natural groupings in your data</p><ClusterViz clusters={data.clusters} />{(!data.clusters || data.clusters.length === 0) && <p style={{ color: '#374151', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>Need at least 2 numeric columns for clustering</p>}</div>}
@@ -1281,4 +1257,49 @@ export default function App() {
       </div>
     </div>
   );
-}
+}  
+          
+            
+                  
+
+
+    
+  
+          
+
+  
+            
+  
+    
+    
+                
+            
+    
+    
+    
+            
+        
+  
+      
+      
+
+  
+    
+      
+              
+      
+          
+         
+              
+              
+            
+                    
+ 
+    
+      
+      
+              
+                  
+              
+                    
+                    
