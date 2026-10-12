@@ -1,346 +1,244 @@
-// ── Check Credits ─────────────────────────────────────────
+'use strict';
 const express = require('express');
-const router = express.Router();
-const { pool } = require('../db/postgres');
-const { sendOTPEmail, sendPasswordResetEmail } = require('../utils/mailer');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { pool, withTx } = require('../db/postgres');
+const { signToken, requireAuth } = require('../middleware/auth');
+const { HttpError, asyncHandler } = require('../middleware/errors');
+const { authLimiter, otpLimiter } = require('../middleware/rateLimits');
+const { sendOTPEmail, sendAccountExistsEmail, sendPasswordResetEmail } = require('../utils/mailer');
+const { normalizeEmail, isEmail, passwordProblem, CURRENCIES } = require('../utils/validate');
+const { clientUrl, isProd } = require('../config/env');
+const { getCredits, ensureRow } = require('../utils/credits');
 
-const otpStore = {};
-const resetStore = {};
+const router = express.Router();
 
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
+const ROUNDS = () => Math.min(14, Math.max(10, parseInt(process.env.BCRYPT_ROUNDS, 10) || 12));
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const OTP_MINUTES = 10;
+const OTP_RESEND_SECONDS = 60;
+const OTP_MAX_ATTEMPTS = 5;
+// A real hash of a throwaway string, so login takes the same time whether or not the email exists.
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 10);
 
-// ── Send OTP ──────────────────────────────────────────────
-router.post('/send-otp', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
-  try {
-    const otp = generateOTP();
-    otpStore[email] = { otp, expires: Date.now() + 10 * 60 * 1000 };
-    await sendOTPEmail(email, otp);
-    res.json({ success: true, message: 'OTP sent to your email' });
-  } catch (err) {
-    console.error('Send OTP error:', err.message);
-    res.status(500).json({ error: 'Failed to send OTP email' });
-  }
+const publicUser = (u) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email,
+  currency: u.currency || 'INR',
+  notifications_enabled: u.notifications_enabled !== false,
+  created_at: u.created_at,
 });
 
-// ── Verify OTP + Register ─────────────────────────────────
-router.post('/verify-otp', async (req, res) => {
-  const { email, otp, name, password } = req.body;
-  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
-  const stored = otpStore[email];
-  if (!stored) return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
-  if (Date.now() > stored.expires) return res.status(400).json({ error: 'OTP expired. Please request a new one.' });
-  if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) return res.status(400).json({ error: 'Email already registered' });
-    await pool.query('INSERT INTO users (name, email, password) VALUES ($1, $2, $3)', [name, email, password]);
-    delete otpStore[email];
-    res.json({ success: true, user: { name, email } });
-  } catch (err) {
-    console.error('Verify OTP error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
+const otpHash = (email, code) => sha256(`${email}:${code}:${process.env.JWT_SECRET}`);
 
-// ── Login ─────────────────────────────────────────────────
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    const result = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
-    if (!result.rows.length) return res.status(401).json({ error: 'Invalid email or password' });
-    const user = result.rows[0];
-    res.json({ success: true, user: { name: user.name, email: user.email } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// ── Step 1 of sign-up: email a 6-digit code ────────────────────
+router.post('/auth/send-otp', otpLimiter, asyncHandler(async (req, res) => {
+  const email = normalizeEmail(req.body.email);
+  if (!isEmail(email)) throw new HttpError(400, 'Enter a valid email address.');
 
-// ── Forgot Password ───────────────────────────────────────
-router.post('/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (!result.rows.length) return res.status(404).json({ error: 'No account found with this email' });
+  const existing = await pool.query('SELECT 1 FROM users WHERE lower(email) = $1', [email]);
+  const recent = await pool.query(
+    `SELECT 1 FROM otp_codes WHERE email = $1 AND sent_at > NOW() - ($2 || ' seconds')::interval`,
+    [email, String(OTP_RESEND_SECONDS)]
+  );
+  if (recent.rowCount) {
+    throw new HttpError(429, `Please wait ${OTP_RESEND_SECONDS} seconds before asking for another code.`);
+  }
+
+  if (existing.rowCount) {
+    // Same response either way, so the form can't be used to discover who has an account.
+    await sendAccountExistsEmail(email);
+    await pool.query(
+      `INSERT INTO otp_codes (email, code_hash, expires_at, attempts, sent_at)
+       VALUES ($1, 'none', NOW(), 99, NOW())
+       ON CONFLICT (email) DO UPDATE SET code_hash = 'none', expires_at = NOW(), attempts = 99, sent_at = NOW()`,
+      [email]
+    );
+    return res.json({ success: true, message: 'If this email can be used, a code is on its way.' });
+  }
+
+  const code = String(crypto.randomInt(100000, 1000000));
+  await pool.query(
+    `INSERT INTO otp_codes (email, code_hash, expires_at, attempts, sent_at)
+     VALUES ($1, $2, NOW() + ($3 || ' minutes')::interval, 0, NOW())
+     ON CONFLICT (email) DO UPDATE
+       SET code_hash = $2, expires_at = NOW() + ($3 || ' minutes')::interval, attempts = 0, sent_at = NOW()`,
+    [email, otpHash(email, code), String(OTP_MINUTES)]
+  );
+  await sendOTPEmail(email, code);
+  res.json({ success: true, message: 'If this email can be used, a code is on its way.' });
+}));
+
+// ── Step 2 of sign-up: check the code and create the account ───
+router.post('/auth/register', authLimiter, asyncHandler(async (req, res) => {
+  const email = normalizeEmail(req.body.email);
+  const code = String(req.body.otp || '').trim();
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  const password = String(req.body.password || '');
+
+  if (!isEmail(email) || !code) throw new HttpError(400, 'Enter your email and the 6-digit code.');
+  if (!name) throw new HttpError(400, 'Enter your name.');
+  const pwProblem = passwordProblem(password);
+  if (pwProblem) throw new HttpError(400, pwProblem);
+
+  const invalid = new HttpError(400, 'That code is not valid. Request a new one and try again.');
+
+  // Count this guess FIRST, in one atomic statement, outside any transaction that could roll it back.
+  // That makes the "5 tries" limit hold even if someone fires many guesses at once.
+  const claimed = await pool.query(
+    `UPDATE otp_codes SET attempts = attempts + 1
+     WHERE email = $1 AND attempts < $2 AND expires_at > NOW()
+     RETURNING code_hash`,
+    [email, OTP_MAX_ATTEMPTS]
+  );
+  if (!claimed.rowCount) throw invalid;
+  const expected = Buffer.from(claimed.rows[0].code_hash);
+  const given = Buffer.from(otpHash(email, code));
+  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) throw invalid;
+
+  const user = await withTx(async (db) => {
+    const taken = await db.query('SELECT 1 FROM users WHERE lower(email) = $1', [email]);
+    if (taken.rowCount) throw invalid;
+
+    const hash = await bcrypt.hash(password, ROUNDS());
+    const created = await db.query(
+      `INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3)
+       RETURNING id, name, email, currency, notifications_enabled, created_at`,
+      [name, email, hash]
+    );
+    await ensureRow(db, email);
+    await db.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    return created.rows[0];
+  });
+
+  res.status(201).json({ success: true, token: signToken(user), user: publicUser(user) });
+}));
+
+// ── Sign in ────────────────────────────────────────────────────
+router.post('/auth/login', authLimiter, asyncHandler(async (req, res) => {
+  const email = normalizeEmail(req.body.email);
+  const password = String(req.body.password || '');
+  if (!email || !password) throw new HttpError(400, 'Enter your email and password.');
+
+  const { rows } = await pool.query(
+    `SELECT id, name, email, password_hash, currency, notifications_enabled, created_at
+     FROM users WHERE lower(email) = $1`,
+    [email]
+  );
+  const user = rows[0];
+  const ok = await bcrypt.compare(password, user ? user.password_hash || DUMMY_HASH : DUMMY_HASH);
+  if (!user || !ok) throw new HttpError(401, 'That email and password do not match.');
+
+  res.json({ success: true, token: signToken(user), user: publicUser(user) });
+}));
+
+// ── Who am I (also returns credits) ────────────────────────────
+router.get('/auth/me', requireAuth, asyncHandler(async (req, res) => {
+  const credits = await getCredits(req.user.email);
+  res.json({ user: publicUser(req.user), credits });
+}));
+
+// ── Forgot / reset password ────────────────────────────────────
+router.post('/auth/forgot-password', otpLimiter, asyncHandler(async (req, res) => {
+  const email = normalizeEmail(req.body.email);
+  if (!isEmail(email)) throw new HttpError(400, 'Enter a valid email address.');
+
+  const { rows } = await pool.query('SELECT id, email FROM users WHERE lower(email) = $1', [email]);
+  if (rows.length) {
     const token = crypto.randomBytes(32).toString('hex');
-    resetStore[token] = { email, expires: Date.now() + 30 * 60 * 1000 };
-    const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${token}`;
-    await sendPasswordResetEmail(email, resetLink);
-    res.json({ success: true, message: 'Password reset link sent to your email' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Reset Password ────────────────────────────────────────
-router.post('/reset-password', async (req, res) => {
-  const { token, password } = req.body;
-  if (!token || !password) return res.status(400).json({ error: 'Token and password required' });
-  const stored = resetStore[token];
-  if (!stored) return res.status(400).json({ error: 'Invalid or expired reset link' });
-  if (Date.now() > stored.expires) return res.status(400).json({ error: 'Reset link expired' });
-  try {
-    await pool.query('UPDATE users SET password = $1 WHERE email = $2', [password, stored.email]);
-    delete resetStore[token];
-    res.json({ success: true, message: 'Password updated successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Get Profile ───────────────────────────────────────────
-router.get('/profile/:email', async (req, res) => {
-  const { email } = req.params;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_profiles (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        bio TEXT DEFAULT '',
-        avatar_url TEXT DEFAULT '',
-        total_analyses INTEGER DEFAULT 0,
-        notifications_enabled BOOLEAN DEFAULT true,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS analysis_history (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        question TEXT NOT NULL,
-        sql_generated TEXT,
-        rows_returned INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    let profile = await pool.query('SELECT * FROM user_profiles WHERE email = $1', [email]);
-    if (!profile.rows.length) {
-      await pool.query('INSERT INTO user_profiles (email) VALUES ($1)', [email]);
-      profile = await pool.query('SELECT * FROM user_profiles WHERE email = $1', [email]);
-    }
-    const history = await pool.query(
-      'SELECT * FROM analysis_history WHERE email = $1 ORDER BY created_at DESC LIMIT 20',
-      [email]
-    );
-    const user = await pool.query('SELECT name, email, created_at FROM users WHERE email = $1', [email]);
-    res.json({ profile: profile.rows[0], history: history.rows, user: user.rows[0] });
-  } catch (err) {
-    console.error('Profile error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Update Profile ────────────────────────────────────────
-router.post('/profile/update', async (req, res) => {
-  const { email, bio, avatar_url, notifications_enabled } = req.body;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_profiles (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        bio TEXT DEFAULT '',
-        avatar_url TEXT DEFAULT '',
-        total_analyses INTEGER DEFAULT 0,
-        notifications_enabled BOOLEAN DEFAULT true,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    await pool.query(`
-      INSERT INTO user_profiles (email, bio, avatar_url, notifications_enabled)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (email) DO UPDATE
-      SET bio = $2, avatar_url = $3, notifications_enabled = $4
-    `, [email, bio, avatar_url, notifications_enabled]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Profile update error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Change Password ───────────────────────────────────────
-router.post('/change-password', async (req, res) => {
-  const { email, oldPassword, newPassword } = req.body;
-  try {
-    const result = await pool.query(
-      'SELECT * FROM users WHERE email = $1 AND password = $2',
-      [email, oldPassword]
-    );
-    if (!result.rows.length) return res.status(401).json({ error: 'Current password is incorrect' });
-    await pool.query('UPDATE users SET password = $1 WHERE email = $2', [newPassword, email]);
-    res.json({ success: true, message: 'Password updated successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Delete Account ────────────────────────────────────────
-router.delete('/delete-account', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const result = await pool.query(
-      'SELECT * FROM users WHERE email = $1 AND password = $2',
-      [email, password]
-    );
-    if (!result.rows.length) return res.status(401).json({ error: 'Invalid password' });
-    await pool.query('DELETE FROM analysis_history WHERE email = $1', [email]);
-    await pool.query('DELETE FROM user_profiles WHERE email = $1', [email]);
-    await pool.query('DELETE FROM users WHERE email = $1', [email]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Save Analysis ─────────────────────────────────────────
-router.post('/save-analysis', async (req, res) => {
-  const { email, question, sql_generated, rows_returned } = req.body;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS analysis_history (
-        id SERIAL PRIMARY KEY,
-        email TEXT NOT NULL,
-        question TEXT NOT NULL,
-        sql_generated TEXT,
-        rows_returned INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
+    await pool.query('DELETE FROM reset_tokens WHERE user_id = $1', [rows[0].id]);
     await pool.query(
-      'INSERT INTO analysis_history (email, question, sql_generated, rows_returned) VALUES ($1, $2, $3, $4)',
-      [email, question, sql_generated, rows_returned || 0]
+      `INSERT INTO reset_tokens (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 minutes')`,
+      [sha256(token), rows[0].id]
     );
-    await pool.query(
-      'UPDATE user_profiles SET total_analyses = total_analyses + 1 WHERE email = $1',
-      [email]
+    const link = `${clientUrl()}/?reset_token=${token}`;
+    try {
+      await sendPasswordResetEmail(rows[0].email, link);
+    } catch (err) {
+      console.error('Reset email failed:', err.message);
+    }
+    if (!isProd()) console.log('Dev reset link:', link);
+  }
+  // Same answer whether or not the account exists.
+  res.json({ success: true, message: 'If an account exists for that email, a reset link is on its way.' });
+}));
+
+router.post('/auth/reset-password', authLimiter, asyncHandler(async (req, res) => {
+  const token = String(req.body.token || '');
+  const password = String(req.body.password || '');
+  const pwProblem = passwordProblem(password);
+  if (pwProblem) throw new HttpError(400, pwProblem);
+  if (!token) throw new HttpError(400, 'This reset link is not valid.');
+
+  await withTx(async (db) => {
+    const { rows } = await db.query(
+      'SELECT user_id FROM reset_tokens WHERE token_hash = $1 AND expires_at > NOW() FOR UPDATE',
+      [sha256(token)]
     );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (!rows.length) throw new HttpError(400, 'This reset link has expired or was already used. Request a new one.');
+    const hash = await bcrypt.hash(password, ROUNDS());
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, rows[0].user_id]);
+    await db.query('DELETE FROM reset_tokens WHERE user_id = $1', [rows[0].user_id]);
+  });
+  res.json({ success: true, message: 'Password updated. You can sign in now.' });
+}));
+
+// ── Account settings (signed in) ───────────────────────────────
+router.post('/auth/change-password', requireAuth, authLimiter, asyncHandler(async (req, res) => {
+  const oldPassword = String(req.body.oldPassword || '');
+  const newPassword = String(req.body.newPassword || '');
+  const pwProblem = passwordProblem(newPassword);
+  if (pwProblem) throw new HttpError(400, pwProblem);
+
+  const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+  const ok = await bcrypt.compare(oldPassword, rows[0].password_hash || DUMMY_HASH);
+  if (!ok) throw new HttpError(401, 'Your current password is not correct.');
+
+  const hash = await bcrypt.hash(newPassword, ROUNDS());
+  await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
+  res.json({ success: true, message: 'Password updated.' });
+}));
+
+router.patch('/auth/settings', requireAuth, asyncHandler(async (req, res) => {
+  const sets = [];
+  const vals = [];
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name).trim().slice(0, 80);
+    if (!name) throw new HttpError(400, 'Name can not be empty.');
+    vals.push(name); sets.push(`name = $${vals.length}`);
   }
-});
-// ── Check Credits ─────────────────────────────────────────
-router.get('/credits/:email', async (req, res) => {
-  const { email } = req.params;
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_credits (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        plan TEXT DEFAULT 'free',
-        credits_used INTEGER DEFAULT 0,
-        credits_limit INTEGER DEFAULT 10,
-        reset_date TIMESTAMP DEFAULT DATE_TRUNC('month', NOW()) + INTERVAL '1 month',
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-
-    let result = await pool.query('SELECT * FROM user_credits WHERE email = $1', [email]);
-
-    if (!result.rows.length) {
-      await pool.query(
-        'INSERT INTO user_credits (email, plan, credits_used, credits_limit) VALUES ($1, $2, $3, $4)',
-        [email, 'free', 0, 10]
-      );
-      result = await pool.query('SELECT * FROM user_credits WHERE email = $1', [email]);
-    }
-
-    const credits = result.rows[0];
-
-    // Reset credits if month has passed
-    if (new Date() > new Date(credits.reset_date)) {
-      await pool.query(
-        'UPDATE user_credits SET credits_used = 0, reset_date = DATE_TRUNC(\'month\', NOW()) + INTERVAL \'1 month\' WHERE email = $1',
-        [email]
-      );
-      credits.credits_used = 0;
-    }
-
-    res.json({
-      plan: credits.plan,
-      credits_used: credits.credits_used,
-      credits_limit: credits.plan === 'enterprise' ? 'unlimited' : credits.credits_limit,
-      credits_remaining: credits.plan === 'enterprise' ? 'unlimited' : credits.credits_limit - credits.credits_used,
-      reset_date: credits.reset_date
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (req.body.currency !== undefined) {
+    if (!CURRENCIES.includes(req.body.currency)) throw new HttpError(400, 'Choose INR, USD, GBP or EUR.');
+    vals.push(req.body.currency); sets.push(`currency = $${vals.length}`);
   }
-});
-
-// ── Use Credit ────────────────────────────────────────────
-router.post('/use-credit', async (req, res) => {
-  const { email } = req.body;
-  try {
-    const result = await pool.query('SELECT * FROM user_credits WHERE email = $1', [email]);
-    if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
-
-    const credits = result.rows[0];
-
-    // Check if enterprise (unlimited)
-    if (credits.plan === 'enterprise') {
-      await pool.query('UPDATE user_credits SET credits_used = credits_used + 1 WHERE email = $1', [email]);
-      return res.json({ success: true, unlimited: true });
-    }
-
-    // Check limit
-    if (credits.credits_used >= credits.credits_limit) {
-      return res.status(403).json({
-        error: 'Credit limit reached',
-        plan: credits.plan,
-        limit: credits.credits_limit,
-        upgrade_required: true
-      });
-    }
-
-    await pool.query('UPDATE user_credits SET credits_used = credits_used + 1 WHERE email = $1', [email]);
-    res.json({
-      success: true,
-      credits_used: credits.credits_used + 1,
-      credits_remaining: credits.credits_limit - credits.credits_used - 1
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  if (req.body.notifications_enabled !== undefined) {
+    vals.push(Boolean(req.body.notifications_enabled)); sets.push(`notifications_enabled = $${vals.length}`);
   }
-});
+  if (!sets.length) throw new HttpError(400, 'Nothing to update.');
+  vals.push(req.user.id);
+  const { rows } = await pool.query(
+    `UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length}
+     RETURNING id, name, email, currency, notifications_enabled, created_at`,
+    vals
+  );
+  res.json({ success: true, user: publicUser(rows[0]) });
+}));
 
-// ── Upgrade Plan ──────────────────────────────────────────
-router.post('/upgrade-plan', async (req, res) => {
-  const { email, plan } = req.body;
-  const limits = { free: 10, pro: 100, enterprise: 999999 };
-  try {
-    await pool.query(
-      'UPDATE user_credits SET plan = $1, credits_limit = $2, credits_used = 0 WHERE email = $3',
-      [plan, limits[plan], email]
-    );
-    res.json({ success: true, plan, credits_limit: limits[plan] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+router.delete('/auth/account', requireAuth, authLimiter, asyncHandler(async (req, res) => {
+  const password = String(req.body.password || '');
+  const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+  const ok = await bcrypt.compare(password, rows[0].password_hash || DUMMY_HASH);
+  if (!ok) throw new HttpError(401, 'That password is not correct.');
+
+  await withTx(async (db) => {
+    // shop_orders, shop_products, ask_history, data_uploads and reset_tokens cascade from users.
+    await db.query('DELETE FROM payments WHERE email = $1 AND status <> $2', [req.user.email, 'paid']);
+    await db.query('DELETE FROM user_credits WHERE email = $1', [req.user.email]);
+    await db.query('DELETE FROM otp_codes WHERE email = $1', [req.user.email]);
+    await db.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+  });
+  res.json({ success: true });
+}));
 
 module.exports = router;
